@@ -92,24 +92,76 @@ def make_loopable(src: Path, dst: Path, *, xfade_s: float = 1.0) -> None:
     ])
 
 
-def loop_to_duration(
-    loopable: Path,
+def build_session(
+    clips: list[Path],
     dst: Path,
-    target_s: float,
     *,
     resolution: str = "1080p",
     fps: int = 30,
+    xfade_s: float = 1.0,
 ) -> None:
-    """Loop a loopable clip until `target_s`, re-encoded at the target resolution & fps."""
+    """Concatenate N clips with crossfades into a single normalized video.
+
+    All inputs are scaled + cropped to the target resolution and re-sampled to `fps`
+    so that the xfade chain has uniform inputs. With N==1 this is just a normalize.
+    Result duration = sum(durations) - (N-1) * xfade_s.
+    """
+    if not clips:
+        raise FfmpegError("build_session: no clips provided")
     dst.parent.mkdir(parents=True, exist_ok=True)
     w, h = RESOLUTIONS.get(resolution.lower(), RESOLUTIONS["1080p"])
+    durations = [probe_duration(c) for c in clips]
+
+    inputs: list[str] = []
+    for c in clips:
+        inputs += ["-i", str(c)]
+
+    norm = (
+        f"scale={w}:{h}:force_original_aspect_ratio=increase,"
+        f"crop={w}:{h},fps={fps},setpts=PTS-STARTPTS,format=yuv420p"
+    )
+    parts: list[str] = [f"[{i}:v]{norm}[c{i}]" for i in range(len(clips))]
+
+    last_label = "c0"
+    running = durations[0]
+    for i in range(1, len(clips)):
+        offset = running - xfade_s
+        if offset <= 0:
+            raise FfmpegError(
+                f"Clip {i} too short for {xfade_s}s xfade at offset {offset:.2f}s"
+            )
+        out_label = f"v{i}"
+        parts.append(
+            f"[{last_label}][c{i}]xfade=transition=fade:"
+            f"duration={xfade_s:.6f}:offset={offset:.6f}[{out_label}]"
+        )
+        running = running + durations[i] - xfade_s
+        last_label = out_label
+
+    filter_complex = ";".join(parts)
+    run([
+        "ffmpeg", "-y", "-nostats", "-loglevel", "warning",
+        *inputs,
+        "-filter_complex", filter_complex,
+        "-map", f"[{last_label}]",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-pix_fmt", "yuv420p", "-an",
+        str(dst),
+    ])
+
+
+def loop_concat(loopable: Path, dst: Path, target_s: float) -> None:
+    """Stream-loop a clip to `target_s` seconds using -c:v copy (no re-encode).
+
+    Requires `loopable` to already be in the desired codec/resolution/fps (i.e. the
+    output of build_session + make_loopable). Fast even for 8-hour outputs.
+    """
+    dst.parent.mkdir(parents=True, exist_ok=True)
     run([
         "ffmpeg", "-y", "-nostats", "-loglevel", "warning",
         "-stream_loop", "-1", "-i", str(loopable),
         "-t", f"{target_s:.3f}",
-        "-vf", f"scale={w}:{h}:flags=lanczos,fps={fps},format=yuv420p",
-        "-c:v", "libx264", "-preset", "medium", "-crf", "20",
-        "-an",
+        "-c:v", "copy", "-an",
         str(dst),
     ])
 

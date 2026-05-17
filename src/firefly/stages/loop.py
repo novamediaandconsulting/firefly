@@ -29,24 +29,35 @@ def run(project: Project, *, duration_min: int | None = None, force: bool = Fals
 
     console.print(
         f"[bold]loop[/bold] building {state.config.target_duration_minutes}-minute video "
-        f"from {len(approved)} clip(s)…"
+        f"from {len(approved)} clip(s) @ {state.config.resolution}…"
     )
     stage.status = StageStatus.IN_PROGRESS
     project.save_state(state)
 
     try:
-        # MVP path: use the first approved clip. Multi-clip crossfade scheduling
-        # comes in iteration 2.
-        primary = approved[0]
-        src = project.clips_dir / primary.filename
-        loopable = project.intermediate_dir / "loopable.mp4"
-        console.print(f"  making seamless loop from {primary.filename}…")
-        ffmpeg.make_loopable(src, loopable, xfade_s=1.0)
-        console.print(f"  looping to {target_s:.0f}s @ {state.config.resolution}…")
-        ffmpeg.loop_to_duration(
-            loopable, project.video_track_path, target_s,
-            resolution=state.config.resolution,
+        clip_paths = [project.clips_dir / c.filename for c in approved]
+        session_path = project.intermediate_dir / "session.mp4"
+        loopable_path = project.intermediate_dir / "loopable.mp4"
+
+        console.print(
+            f"  building session: {len(approved)} clip(s) with 1s crossfades…"
         )
+        ffmpeg.build_session(
+            clip_paths, session_path,
+            resolution=state.config.resolution, fps=30, xfade_s=1.0,
+        )
+        session_dur = ffmpeg.probe_duration(session_path)
+        console.print(f"    session duration: {session_dur:.1f}s")
+
+        console.print("  wrapping session for seamless loop…")
+        ffmpeg.make_loopable(session_path, loopable_path, xfade_s=1.0)
+
+        loops = target_s / session_dur
+        console.print(
+            f"  looping to {target_s:.0f}s "
+            f"({loops:.1f}x through the session, stream copy)…"
+        )
+        ffmpeg.loop_concat(loopable_path, project.video_track_path, target_s)
     except Exception as e:
         stage.status = StageStatus.FAILED
         stage.error = str(e)

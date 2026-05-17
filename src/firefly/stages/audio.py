@@ -7,7 +7,7 @@ from rich.console import Console
 from .. import ffmpeg
 from ..config import ASSETS_ROOT
 from ..project import Project
-from ..providers import elevenlabs
+from ..providers import elevenlabs, music
 from ..schemas import StageStatus
 
 console = Console()
@@ -15,7 +15,7 @@ console = Console()
 MUSIC_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg"}
 
 
-def _find_music() -> Path | None:
+def _find_stock_music() -> Path | None:
     music_dir = ASSETS_ROOT / "music"
     if not music_dir.is_dir():
         return None
@@ -25,7 +25,14 @@ def _find_music() -> Path | None:
     return None
 
 
-def run(project: Project, *, silent: bool = False, skip_sfx: bool = False, force: bool = False) -> None:
+def run(
+    project: Project,
+    *,
+    silent: bool = False,
+    stock: bool = False,
+    skip_sfx: bool = False,
+    force: bool = False,
+) -> None:
     state = project.load_state()
     stage = state.stage("audio")
     if stage.status == StageStatus.DONE and not force:
@@ -51,30 +58,27 @@ def run(project: Project, *, silent: bool = False, skip_sfx: bool = False, force
                 "-c:a", "pcm_s16le",
                 str(silent_path),
             ])
-            # Use silence as a single layer so the rest of the pipeline is uniform.
             layers.append((silent_path, 0.0))
         else:
-            music = _find_music()
-            if music is None:
-                raise RuntimeError(
-                    "No music file found in assets/music/. Drop a .mp3/.wav there, "
-                    "or pass --silent to skip music."
-                )
-            console.print(f"[bold]audio[/bold] music bed: {music.name}")
-            layers.append((music, 0.0))
+            music_path = _get_music_bed(project, plan, prefer_stock=stock)
+            console.print(f"[bold]audio[/bold] music bed: {music_path.name}")
+            layers.append((music_path, 0.0))
 
-            if not skip_sfx and plan and plan.sfx_layers and os.getenv("ELEVENLABS_API_KEY"):
-                for sfx in plan.sfx_layers:
-                    sfx_path = project.intermediate_dir / f"sfx_{_safe(sfx.name)}.mp3"
-                    if not sfx_path.exists() or force:
-                        console.print(f"  generating SFX layer: {sfx.name}")
-                        mp3 = elevenlabs.generate_sfx(sfx.prompt, duration_s=22.0)
-                        sfx_path.write_bytes(mp3)
-                    layers.append((sfx_path, sfx.gain_db))
-            elif not skip_sfx and plan and plan.sfx_layers:
-                console.print(
-                    "  [yellow]skipping SFX layers: ELEVENLABS_API_KEY not set[/yellow]"
-                )
+            if not skip_sfx and plan and plan.sfx_layers:
+                if os.getenv("ELEVENLABS_API_KEY"):
+                    for sfx in plan.sfx_layers:
+                        sfx_path = project.intermediate_dir / f"sfx_{_safe(sfx.name)}.mp3"
+                        if not sfx_path.exists():
+                            console.print(f"  generating SFX layer: {sfx.name}")
+                            mp3 = elevenlabs.generate_sfx(sfx.prompt, duration_s=30.0, loop=True)
+                            sfx_path.write_bytes(mp3)
+                        else:
+                            console.print(f"  reusing existing SFX layer: {sfx.name}")
+                        layers.append((sfx_path, sfx.gain_db))
+                else:
+                    console.print(
+                        "  [yellow]skipping SFX layers: ELEVENLABS_API_KEY not set[/yellow]"
+                    )
 
         console.print(f"  mixing {len(layers)} layer(s) to {target_s:.0f}s…")
         ffmpeg.mix_audio(layers, project.audio_track_path, target_s)
@@ -93,6 +97,41 @@ def run(project: Project, *, silent: bool = False, skip_sfx: bool = False, force
     project.save_state(state)
     console.print(f"[green]audio[/green] → {project.audio_track_path}")
     console.print(f"  preview: {project.audio_preview_path}")
+
+
+def _get_music_bed(project: Project, plan, *, prefer_stock: bool) -> Path:
+    """Return a path to a music bed, generating via fal if needed.
+
+    Generated music is sticky — once written to disk it is reused on every remix.
+    To force regeneration, delete intermediate/music_bed.wav before running.
+    """
+    stock = _find_stock_music()
+    if prefer_stock:
+        if stock is None:
+            raise RuntimeError(
+                "--stock requested but no music in assets/music/. "
+                "Drop an .mp3/.wav there or drop --stock to use generated music."
+            )
+        return stock
+
+    state = project.load_state()
+    bed = project.intermediate_dir / "music_bed.wav"
+    if bed.exists():
+        return bed
+
+    if plan is None or not plan.music_mood:
+        raise RuntimeError("Cannot generate music: plan.json missing or has no music_mood.")
+    console.print(
+        f"  generating music ({state.config.music_duration_s}s "
+        f"@ {state.config.music_model})…"
+    )
+    audio_bytes, _meta = music.generate_music(
+        plan.music_mood,
+        duration_s=state.config.music_duration_s,
+        model=state.config.music_model,
+    )
+    bed.write_bytes(audio_bytes)
+    return bed
 
 
 def _safe(name: str) -> str:

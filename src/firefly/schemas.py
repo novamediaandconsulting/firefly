@@ -68,6 +68,8 @@ class ProjectConfig(BaseModel):
     metadata_model: str = "claude-sonnet-4-6"
     image_model: str = "fal-ai/flux-pro/v1.1"
     video_model: str = "fal-ai/kling-video/v3/pro/image-to-video"
+    music_model: str = "cassetteai/music-generator"
+    music_duration_s: int = 180  # length of one generated bed; we loop to target
 
 
 STAGE_NAMES = ("plan", "images", "clips", "loop", "audio", "mux", "metadata")

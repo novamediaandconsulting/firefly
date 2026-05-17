@@ -161,11 +161,15 @@ def loop(
 def audio(
     slug: str,
     silent: Annotated[bool, typer.Option("--silent", help="Skip music & SFX; produce silence.")] = False,
+    stock: Annotated[bool, typer.Option("--stock", help="Use stock music in assets/music/ instead of generating.")] = False,
     skip_sfx: Annotated[bool, typer.Option("--skip-sfx", help="Music only; no SFX layers.")] = False,
     force: Annotated[bool, typer.Option("--force")] = False,
 ) -> None:
-    """Build the long-form audio track (music + SFX)."""
-    audio_stage.run(_load(slug), silent=silent, skip_sfx=skip_sfx, force=force)
+    """Build the long-form audio track (music + SFX).
+
+    Default: generate music via fal (CassetteAI), layer SFX via ElevenLabs.
+    """
+    audio_stage.run(_load(slug), silent=silent, stock=stock, skip_sfx=skip_sfx, force=force)
 
 
 @app.command()
