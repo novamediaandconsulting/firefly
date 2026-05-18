@@ -129,11 +129,21 @@ class GenerateImagesRequest(BaseModel):
     force: bool = False
 
 
-@router.post("", response_model=ImageManifest)
-def generate_images(slug: str, req: GenerateImagesRequest) -> ImageManifest:
+@router.post("", status_code=202)
+def generate_images(slug: str, req: GenerateImagesRequest) -> dict:
+    """Kick off image generation in a background thread.
+
+    Frontend polls GET /images (and GET /project to know when current_job
+    clears) — new entries appear in the manifest as each candidate finishes.
+    """
+    from ..jobs import start_job
     proj = load_project(slug)
-    images_stage.run(proj, count=req.count, force=req.force)
-    return proj.load_image_manifest()
+    job = start_job(
+        proj, stage="images",
+        message=f"generating {req.count} image(s)",
+        fn=lambda: images_stage.run(proj, count=req.count, force=req.force),
+    )
+    return {"status": "started", "job": job.model_dump(mode="json")}
 
 
 class ApproveRequest(BaseModel):

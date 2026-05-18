@@ -23,11 +23,21 @@ class GenerateClipsRequest(BaseModel):
     force: bool = False
 
 
-@router.post("", response_model=ClipManifest)
-def generate_clips(slug: str, req: GenerateClipsRequest) -> ClipManifest:
+@router.post("", status_code=202)
+def generate_clips(slug: str, req: GenerateClipsRequest) -> dict:
+    """Kick off clip generation in a background thread.
+
+    Each clip is written to the manifest as it finishes; the frontend polls
+    GET /clips to see new ones appear (~30-90s per clip on Kling).
+    """
+    from ..jobs import start_job
     proj = load_project(slug)
-    clips_stage.run(proj, per_image=req.per_image, force=req.force)
-    return proj.load_clip_manifest()
+    job = start_job(
+        proj, stage="clips",
+        message=f"generating {req.per_image} clip(s) per approved image",
+        fn=lambda: clips_stage.run(proj, per_image=req.per_image, force=req.force),
+    )
+    return {"status": "started", "job": job.model_dump(mode="json")}
 
 
 class ApproveRequest(BaseModel):

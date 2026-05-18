@@ -7,6 +7,7 @@ import { api, projectFileUrl } from "@/lib/api";
 import type { SFXLayer, SfxLayerState } from "@/lib/types";
 import { WizardLayout } from "@/components/wizard-layout";
 import { PickedImageAnchor } from "@/components/picked-image-anchor";
+import { useJobPolling } from "@/lib/job-polling";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,6 +26,7 @@ export default function SfxStep({
   const [editLayers, setEditLayers] = useState<SFXLayer[]>([]);
   const [dirty, setDirty] = useState(false);
 
+  const sfxPollInterval = useJobPolling(slug, ["sfx"]);
   const planQ = useQuery({
     queryKey: ["plan", slug],
     queryFn: () => api.getPlan(slug),
@@ -34,7 +36,16 @@ export default function SfxStep({
     queryKey: ["sfx", slug],
     queryFn: () => api.getSfx(slug),
     retry: false,
+    refetchInterval: sfxPollInterval,
   });
+  const stateQ = useQuery({
+    queryKey: ["project", slug],
+    queryFn: () => api.getProject(slug),
+    retry: false,
+  });
+  const isGenerating =
+    stateQ.data?.current_job?.stage === "sfx" &&
+    !stateQ.data.current_job.error;
 
   useEffect(() => {
     if (planQ.data) {
@@ -223,9 +234,9 @@ export default function SfxStep({
           />
           <Button
             onClick={() => generate.mutate()}
-            disabled={generate.isPending}
+            disabled={generate.isPending || isGenerating}
           >
-            {generate.isPending ? "Generating…" : "Generate variations"}
+            {isGenerating ? "Generating…" : "Generate variations"}
           </Button>
         </CardContent>
       </Card>

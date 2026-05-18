@@ -55,24 +55,38 @@ class GenerateSfxRequest(BaseModel):
     variations: int = 3
 
 
-@router.post("/sfx/generate")
+@router.post("/sfx/generate", status_code=202)
 def generate_sfx_layers(slug: str, req: GenerateSfxRequest) -> dict:
-    """Generate N variations for every SFX layer in the plan. No mixing."""
+    """Kick off SFX variation generation in a background thread.
+
+    Variations land in intermediate/sfx_<layer>_v<N>.mp3 one at a time.
+    Frontend polls GET /sfx for progress.
+    """
+    from ..jobs import start_job
     proj = load_project(slug)
-    audio_stage.ensure_all_sfx_variations(proj, variations=req.variations)
-    return {"layers": audio_stage.list_sfx_variations(proj)}
+    job = start_job(
+        proj, stage="sfx",
+        message=f"generating {req.variations} variation(s) per SFX layer",
+        fn=lambda: audio_stage.ensure_all_sfx_variations(proj, variations=req.variations),
+    )
+    return {"status": "started", "job": job.model_dump(mode="json")}
 
 
 class GenerateMusicRequest(BaseModel):
     variations: int = 3
 
 
-@router.post("/music/generate")
+@router.post("/music/generate", status_code=202)
 def generate_music_variations(slug: str, req: GenerateMusicRequest) -> dict:
-    """Generate N music bed variations. No mixing."""
+    """Kick off music bed variation generation in a background thread."""
+    from ..jobs import start_job
     proj = load_project(slug)
-    audio_stage.ensure_music_variations(proj, variations=req.variations)
-    return audio_stage.list_music_variations(proj)
+    job = start_job(
+        proj, stage="music",
+        message=f"generating {req.variations} music variation(s)",
+        fn=lambda: audio_stage.ensure_music_variations(proj, variations=req.variations),
+    )
+    return {"status": "started", "job": job.model_dump(mode="json")}
 
 
 @router.get("/sfx")

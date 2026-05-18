@@ -8,6 +8,7 @@ import type { ClipItem } from "@/lib/types";
 import { WizardLayout } from "@/components/wizard-layout";
 import { PromptListEditor } from "@/components/prompt-list-editor";
 import { PickedImageAnchor } from "@/components/picked-image-anchor";
+import { useJobPolling } from "@/lib/job-polling";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,6 +36,7 @@ export default function ClipsStep({
   const [clipPrompts, setClipPrompts] = useState<string[]>([]);
   const [dirty, setDirty] = useState(false);
 
+  const clipsPollInterval = useJobPolling(slug, ["clips"]);
   const imagesQ = useQuery({
     queryKey: ["images", slug],
     queryFn: () => api.getImages(slug),
@@ -44,12 +46,21 @@ export default function ClipsStep({
     queryKey: ["clips", slug],
     queryFn: () => api.getClips(slug),
     retry: false,
+    refetchInterval: clipsPollInterval,
   });
   const planQ = useQuery({
     queryKey: ["plan", slug],
     queryFn: () => api.getPlan(slug),
     retry: false,
   });
+  const stateQ = useQuery({
+    queryKey: ["project", slug],
+    queryFn: () => api.getProject(slug),
+    retry: false,
+  });
+  const isGenerating =
+    stateQ.data?.current_job?.stage === "clips" &&
+    !stateQ.data.current_job.error;
 
   useEffect(() => {
     if (planQ.data) {
@@ -234,10 +245,10 @@ export default function ClipsStep({
           />
           <Button
             onClick={() => generate.mutate(perImage)}
-            disabled={generate.isPending}
+            disabled={generate.isPending || isGenerating}
           >
-            {generate.isPending
-              ? "Generating…"
+            {isGenerating
+              ? `Generating… ${items.length} so far`
               : items.length === 0
               ? `Generate ${perImage}`
               : `Generate ${perImage} more`}
@@ -247,8 +258,8 @@ export default function ClipsStep({
 
       {items.length === 0 ? (
         <p className="text-sm text-muted-foreground py-12 text-center">
-          {generate.isPending
-            ? "Each clip takes ~30-90s on Kling. Be patient."
+          {isGenerating
+            ? "Each clip takes ~30-90s on Kling. They'll show up here as ready."
             : "No clips yet. Click 'Generate' above."}
         </p>
       ) : (

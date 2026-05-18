@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { api, projectFileUrl } from "@/lib/api";
 import { WizardLayout } from "@/components/wizard-layout";
 import { PickedImageAnchor } from "@/components/picked-image-anchor";
+import { useJobPolling } from "@/lib/job-polling";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -23,16 +24,26 @@ export default function FinalStep({
   const [durationMin, setDurationMin] = useState(30);
   const [audioMode, setAudioMode] = useState("default");
 
+  const renderPollInterval = useJobPolling(slug, ["render"]);
   const variantsQ = useQuery({
     queryKey: ["variants", slug],
     queryFn: () => api.listVariants(slug),
     retry: false,
+    refetchInterval: renderPollInterval,
   });
   const mixQ = useQuery({
     queryKey: ["mix", slug],
     queryFn: () => api.getMix(slug),
     retry: false,
   });
+  const stateQ = useQuery({
+    queryKey: ["project", slug],
+    queryFn: () => api.getProject(slug),
+    retry: false,
+  });
+  const isRendering =
+    stateQ.data?.current_job?.stage === "render" &&
+    !stateQ.data.current_job.error;
 
   const render = useMutation({
     mutationFn: () =>
@@ -119,10 +130,12 @@ export default function FinalStep({
           )}
           <Button
             onClick={() => render.mutate()}
-            disabled={render.isPending || !variantName.trim()}
+            disabled={render.isPending || isRendering || !variantName.trim()}
           >
-            {render.isPending
-              ? "Rendering… (this can take a few minutes for long durations)"
+            {isRendering
+              ? "Rendering in background… progress appears in header"
+              : render.isPending
+              ? "Starting render…"
               : `Render ${variantName}_${durationMin}min`}
           </Button>
         </CardContent>

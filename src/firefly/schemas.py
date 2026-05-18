@@ -144,6 +144,19 @@ class CostEntry(BaseModel):
     cost_usd: float
 
 
+class JobStatus(BaseModel):
+    """Snapshot of an in-flight background job for a project.
+
+    Set by the API job runner before kicking off the worker thread; cleared on
+    success; left in place with an `error` on failure so the UI can surface
+    what went wrong without consulting the server log.
+    """
+    stage: str       # "images" | "clips" | "sfx" | "music" | "render"
+    message: str
+    started_at: datetime
+    error: str | None = None
+
+
 class State(BaseModel):
     slug: str
     concept: str
@@ -152,6 +165,9 @@ class State(BaseModel):
     stages: dict[str, StageState] = Field(
         default_factory=lambda: {name: StageState() for name in STAGE_NAMES}
     )
+    # Populated by api/jobs.py while a background task runs; the web wizard polls
+    # state.current_job to know when to refetch manifests for progressive loading.
+    current_job: JobStatus | None = None
 
     def stage(self, name: str) -> StageState:
         if name not in self.stages:

@@ -7,6 +7,7 @@ import { api, projectFileUrl } from "@/lib/api";
 import type { ImageItem } from "@/lib/types";
 import { WizardLayout } from "@/components/wizard-layout";
 import { PromptListEditor } from "@/components/prompt-list-editor";
+import { useJobPolling } from "@/lib/job-polling";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,16 +35,26 @@ export default function ImagesStep({
   const [imagePrompts, setImagePrompts] = useState<string[]>([]);
   const [dirty, setDirty] = useState(false);
 
+  const imagesPollInterval = useJobPolling(slug, ["images"]);
   const imagesQ = useQuery({
     queryKey: ["images", slug],
     queryFn: () => api.getImages(slug),
     retry: false,
+    refetchInterval: imagesPollInterval,
   });
   const planQ = useQuery({
     queryKey: ["plan", slug],
     queryFn: () => api.getPlan(slug),
     retry: false,
   });
+  const stateQ = useQuery({
+    queryKey: ["project", slug],
+    queryFn: () => api.getProject(slug),
+    retry: false,
+  });
+  const isGenerating =
+    stateQ.data?.current_job?.stage === "images" &&
+    !stateQ.data.current_job.error;
   const items = imagesQ.data?.items ?? [];
   const approvedIds = new Set(items.filter((i) => i.approved).map((i) => i.id));
 
@@ -181,10 +192,10 @@ export default function ImagesStep({
           />
           <Button
             onClick={() => generate.mutate()}
-            disabled={generate.isPending}
+            disabled={generate.isPending || isGenerating}
           >
-            {generate.isPending
-              ? "Generating…"
+            {isGenerating
+              ? `Generating… ${items.length}/?`
               : items.length === 0
               ? `Generate ${count}`
               : `Generate ${count} more`}
@@ -194,8 +205,8 @@ export default function ImagesStep({
 
       {items.length === 0 ? (
         <p className="text-sm text-muted-foreground py-12 text-center">
-          {generate.isPending
-            ? "Generating candidates… each takes ~10-20s."
+          {isGenerating
+            ? "Generating candidates… each takes ~10-20s. They'll appear here as ready."
             : "No images yet. Click 'Generate' above."}
         </p>
       ) : (

@@ -10,6 +10,7 @@ import type {
   FinalVariants,
   ImageGalleryResponse,
   ImageManifest,
+  JobStartedResponse,
   MixConfig,
   MusicState,
   Plan,
@@ -81,7 +82,7 @@ export const api = {
   getImages: (slug: string) =>
     request<ImageManifest>(`/api/projects/${slug}/images`),
   generateImages: (slug: string, count = 4, force = false) =>
-    request<ImageManifest>(`/api/projects/${slug}/images`, {
+    request<JobStartedResponse>(`/api/projects/${slug}/images`, {
       method: "POST",
       body: JSON.stringify({ count, force }),
     }),
@@ -102,7 +103,7 @@ export const api = {
   getClips: (slug: string) =>
     request<ClipManifest>(`/api/projects/${slug}/clips`),
   generateClips: (slug: string, perImage = 3, force = false) =>
-    request<ClipManifest>(`/api/projects/${slug}/clips`, {
+    request<JobStartedResponse>(`/api/projects/${slug}/clips`, {
       method: "POST",
       body: JSON.stringify({ per_image: perImage, force }),
     }),
@@ -155,13 +156,13 @@ export const api = {
   // ---- sfx / music variations ----
   getSfx: (slug: string) => request<SfxState>(`/api/projects/${slug}/sfx`),
   generateSfx: (slug: string, variations = 3) =>
-    request<SfxState>(`/api/projects/${slug}/sfx/generate`, {
+    request<JobStartedResponse>(`/api/projects/${slug}/sfx/generate`, {
       method: "POST",
       body: JSON.stringify({ variations }),
     }),
   getMusic: (slug: string) => request<MusicState>(`/api/projects/${slug}/music`),
   generateMusic: (slug: string, variations = 3) =>
-    request<MusicState>(`/api/projects/${slug}/music/generate`, {
+    request<JobStartedResponse>(`/api/projects/${slug}/music/generate`, {
       method: "POST",
       body: JSON.stringify({ variations }),
     }),
@@ -217,7 +218,7 @@ export const api = {
     slug: string,
     req: { variant: string; duration_min: number; audio_mode?: string; force?: boolean },
   ) =>
-    request<{ final: string }>(`/api/projects/${slug}/render`, {
+    request<JobStartedResponse>(`/api/projects/${slug}/render`, {
       method: "POST",
       body: JSON.stringify(req),
     }),

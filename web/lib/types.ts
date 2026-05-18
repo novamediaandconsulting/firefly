@@ -27,12 +27,26 @@ export interface ProjectConfig {
   clip_duration_s: number;
 }
 
+export interface JobStatus {
+  stage: string;        // "images" | "clips" | "sfx" | "music" | "render"
+  message: string;
+  started_at: string;
+  error: string | null;
+}
+
 export interface State {
   slug: string;
   concept: string;
   created_at: string;
   config: ProjectConfig;
   stages: Record<string, StageState>;
+  current_job: JobStatus | null;
+}
+
+/** Response from any generation endpoint that runs in the background. */
+export interface JobStartedResponse {
+  status: "started";
+  job: JobStatus;
 }
 
 export interface ProjectSummary {

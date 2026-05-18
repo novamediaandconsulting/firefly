@@ -298,18 +298,51 @@ stage functions. Phased build:
     `sfx_brook.pick` contains `"v2"`) so the UI knows the current pick
     without comparing bytes.
 
+## Wizard v2 round (feedback-driven revisions)
+
+- **v2-A** ✅ — fixed audio-doesn't-play bug (`.replace` on SFX/music src),
+  mix board auto-renders preview on slider/checkbox change with cache
+  busting, per-layer enable/disable checkbox via `MixConfig.disabled_layers`,
+  clips default `per_image=1` with a "generate N more" pattern.
+- **v2-B** ✅ — dropped the upfront plan editor. Replaced `/wizard/plan`
+  with `/wizard/title` (just working_title + visual_description). Each
+  subsequent step embeds an editor for its own field (`PromptListEditor` for
+  image_prompts and clip_prompts; inline rows for sfx_layers; textarea for
+  music_mood). Saves auto-trigger on generate.
+- **v2-C** ✅ — `PickedImageAnchor` sticky thumbnail + working title at the
+  top of clips, sfx, music, mix, and final pages. Click expands.
+- **v2-D** ✅ — `/projects/<slug>/gallery/images` lists every PNG including
+  `.bakTTT.png` backups, grouped by base ID, with the prompt that produced
+  each (read from sibling `.prompt.txt` for backups). Linked from project
+  detail.
+- **v2-E** ✅ — background jobs + progressive loading via polling.
+  - `State.current_job: JobStatus | None` tracks in-flight work
+    (`{stage, message, started_at, error}`).
+  - `api/jobs.py` `start_job(project, stage, message, fn)` sets
+    `current_job`, runs `fn` in a `ThreadPoolExecutor`, clears on success,
+    sets `error` on failure. Rejects 409 if a job already running and not
+    in error state.
+  - `generateImages`, `generateClips`, `generateSfx`, `generateMusic`, and
+    `render` endpoints now return 202 `{status, job}` immediately.
+  - Frontend: `lib/job-polling.ts` provides `useJobPolling(slug, stages)`
+    and `projectRefetchInterval()` helpers. WizardLayout polls project
+    state every 2s while a job is running; each step's manifest query
+    refetches on the same cadence when its stage matches. Button labels
+    use `current_job` (not `mutation.isPending`) to reflect long-running
+    state. WizardLayout header shows an amber-pulsing badge with the
+    job's stage + message, or a red badge with the error if failed.
+
 ## What's still not built
 
 - **Metadata stage** (Claude → `youtube.json` with title, description, tags,
   AI-disclosure boilerplate). Scaffolding is there but the stage module isn't
   wired up.
-- **SSE progress streaming** — long-running stages (long renders, big SFX
-  batches) currently block the request. Adding SSE on
-  `/api/projects/<slug>/stream` would let the UI show real-time progress
-  and not lock up during 8-hour renders.
-- **Background job queue** — renders that take >60s should run as
-  background tasks with status polled separately. Today the wizard's
-  final-render mutation just blocks on the response.
+- **SSE / real-time progress** — polling at 2s is fine for our scale; SSE
+  would feel snappier on long renders but adds complexity.
+- **Granular progress (X of N done)** — `JobStatus` doesn't carry a
+  progress counter yet; the UI infers progress from manifest length, which
+  works for image/clip/sfx/music gen but not for renders where there's no
+  intermediate artifact to count.
 - **Multi-deck randomization** — currently the loop stage builds one session
   ordering. For 8-hour videos with many clips, shuffling the order each cycle
   would further reduce perceived repetition. Plumb as a v3 feature only if

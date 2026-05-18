@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { api, projectFileUrl } from "@/lib/api";
 import { WizardLayout } from "@/components/wizard-layout";
 import { PickedImageAnchor } from "@/components/picked-image-anchor";
+import { useJobPolling } from "@/lib/job-polling";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,16 +30,26 @@ export default function MusicStep({
     queryFn: () => api.getPlan(slug),
     retry: false,
   });
+  const musicPollInterval = useJobPolling(slug, ["music"]);
   const musicQ = useQuery({
     queryKey: ["music", slug],
     queryFn: () => api.getMusic(slug),
     retry: false,
+    refetchInterval: musicPollInterval,
   });
   const mixQ = useQuery({
     queryKey: ["mix", slug],
     queryFn: () => api.getMix(slug),
     retry: false,
   });
+  const stateQ = useQuery({
+    queryKey: ["project", slug],
+    queryFn: () => api.getProject(slug),
+    retry: false,
+  });
+  const isGenerating =
+    stateQ.data?.current_job?.stage === "music" &&
+    !stateQ.data.current_job.error;
 
   useEffect(() => {
     if (planQ.data) {
@@ -192,9 +203,9 @@ export default function MusicStep({
               />
               <Button
                 onClick={() => generate.mutate()}
-                disabled={generate.isPending}
+                disabled={generate.isPending || isGenerating}
               >
-                {generate.isPending ? "Generating…" : "Generate variations"}
+                {isGenerating ? "Generating…" : "Generate variations"}
               </Button>
             </CardContent>
           </Card>
