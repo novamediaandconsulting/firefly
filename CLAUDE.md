@@ -263,8 +263,13 @@ stage functions. Phased build:
     redoing the costly stages.
   - `costs.jsonl` append-only log + `firefly cost`; pricing table in
     `src/firefly/costs.py`.
-- **Phase 2: FastAPI service** — REST + SSE around every stage. CORS-open
-  for localhost:3000. Static file serving for media.
+- **Phase 2: FastAPI service** ✅ DONE
+  - `src/firefly/api/` package; start with `firefly api` (port 8000).
+  - REST routes for every pipeline stage. Same Python functions as the CLI.
+  - CORS-open to localhost:3000/3001. Project files served at
+    `/files/<slug>/...` via StaticFiles.
+  - Install with `uv sync --extra api`. SSE for live progress streaming is
+    deferred to the wizard phases when it becomes necessary.
 - **Phase 3: Next.js scaffold** — project list + detail (read-only).
 - **Phases 4–7: 9-step wizard** — concept → plan → refine → images →
   clips → SFX → music → mix board → final variants. Cost tracker in header.

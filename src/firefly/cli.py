@@ -319,6 +319,22 @@ def variants(slug: str) -> None:
 
 
 @app.command()
+def api(
+    host: Annotated[str, typer.Option("--host", help="Bind address.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="Bind port.")] = 8000,
+    reload: Annotated[bool, typer.Option("--reload", help="Auto-reload on code change (dev only).")] = False,
+) -> None:
+    """Start the FastAPI service that the web app talks to."""
+    try:
+        import uvicorn
+    except ImportError as e:
+        raise typer.BadParameter(
+            "FastAPI extras not installed. Run: uv sync --extra api"
+        ) from e
+    uvicorn.run("firefly.api.main:app", host=host, port=port, reload=reload)
+
+
+@app.command()
 def cost(slug: str) -> None:
     """Show cost breakdown for a project from costs.jsonl."""
     proj = _load(slug)
