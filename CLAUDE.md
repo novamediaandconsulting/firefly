@@ -270,7 +270,18 @@ stage functions. Phased build:
     `/files/<slug>/...` via StaticFiles.
   - Install with `uv sync --extra api`. SSE for live progress streaming is
     deferred to the wizard phases when it becomes necessary.
-- **Phase 3: Next.js scaffold** — project list + detail (read-only).
+- **Phase 3: Next.js scaffold** ✅ DONE
+  - `web/` is a standard Next.js 16 App Router app (TypeScript, Tailwind 4,
+    shadcn/ui, TanStack Query, react-hook-form, zod). React 19.
+  - `web/lib/types.ts` mirrors `src/firefly/schemas.py` (manual — keep in sync
+    when editing the Python schemas).
+  - `web/lib/api.ts` is a typed client over the FastAPI endpoints; all calls
+    go through `request()` which throws Error(detail) on non-2xx.
+  - Pages: `/` (project list with stage badges), `/new` (create form),
+    `/projects/[slug]` (overview + Plan + Images grid + Clips grid +
+    Finals list). All client components using TanStack Query.
+  - `dev.sh` runs `firefly api` (8000) + `npm run dev` (3000) side by side
+    with Ctrl-C killing both.
 - **Phases 4–7: 9-step wizard** — concept → plan → refine → images →
   clips → SFX → music → mix board → final variants. Cost tracker in header.
 
