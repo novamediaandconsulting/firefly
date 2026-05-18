@@ -151,20 +151,32 @@ target duration, which is fine — they're ambient.
 ## CLI
 
 ```bash
-uv run firefly init <slug> "<concept>"          # creates project, no API calls
+# Pipeline (run in order)
+uv run firefly init <slug> "<concept>"               # creates project, no API calls
 uv run firefly plan <slug> [--force]
-uv run firefly images <slug> [-n 6] [--force]   # awaiting_qa after success
-uv run firefly approve images <slug> img_03 img_07 ...
-uv run firefly clips <slug> [-n 4]              # n clips per approved image
-uv run firefly approve clips <slug> clip_002 clip_009 ...
+uv run firefly images <slug> [-n 6] [--force]        # awaiting_qa after success
+uv run firefly approve images <slug> img_01 img_03 ...
+uv run firefly clips <slug> [-n 4]                   # n clips per approved image
+uv run firefly approve clips <slug> img_01_01 img_03_02 ...
 uv run firefly loop <slug> [--duration-min 480]
-uv run firefly audio <slug> [--silent | --stock | --skip-sfx]
+uv run firefly audio <slug> [--silent|--stock|--no-music|--skip-sfx]
 uv run firefly mux <slug>
 uv run firefly status <slug>
+
+# QA iteration (re-roll individual artifacts; backs up the previous version)
+uv run firefly regen image <slug> <img_id> [--prompt "..."]
+uv run firefly regen clip  <slug> <clip_id> [--prompt "..."]
+uv run firefly regen sfx   <slug> "<layer name>" [--prompt "..."] [-n 3]
 ```
 
 The `init` command takes optional `--duration-min`, `--resolution`,
 `--plan-model`. These are baked into `state.json` at creation time.
+
+Audio flags:
+- `--silent` — no music, no SFX, just a silent track (debug / video-only test).
+- `--stock` — use any file in `assets/music/` instead of generating music.
+- `--no-music` — SFX only (e.g. a brook video where you only want nature sound).
+- `--skip-sfx` — music only.
 
 ### Idempotency rules
 
@@ -176,6 +188,15 @@ The `init` command takes optional `--duration-min`, `--resolution`,
   This guard prevents accidental re-spend.
 - `images` and `clips` always append to their manifest. If you want a clean
   slate, delete the directory before re-running.
+- `regen` commands always back up the previous artifact next to the original
+  as `<stem>.bak<unix-ts>.<ext>` (with a sibling `.prompt.txt` recording the
+  prompt that produced it). Restore by `mv`-ing the .bak back over the
+  original filename. **Never overwrite without backup** — see the recent
+  decisions section for why.
+- `regen sfx` writes variations as `intermediate/sfx_<slug>_v1.mp3`,
+  `_v2.mp3`, etc., leaving the canonical `sfx_<slug>.mp3` alone. After
+  picking a winner, `cp` the chosen variation over the canonical and run
+  `audio --force && mux --force` to remix.
 
 ## Cost expectations (per 8-hour video)
 
@@ -214,6 +235,13 @@ clip deck is the lever for cost. ffmpeg renders are free but consume CPU/SSD.
   wired up.
 - **Web QA UI** (FastAPI + HTMX) — would replace `firefly approve` with a
   click-through. Stub directory `src/firefly/ui/` is reserved.
+- **`firefly use sfx`** — picking an `regen sfx` variation currently requires
+  a manual `cp <variation> <canonical>`. Wrap that in a `firefly use sfx
+  <slug> <layer> <variation>` command (with backup) when convenient.
+- **Per-render audio mix overrides** — the music+SFX vs SFX-only comparison
+  done for redwood-cabin used an inline Python script. If you find yourself
+  doing that twice, promote it to `firefly preview <slug> [--with-music]
+  [--gains key=db,...]` that writes named final variants.
 - **Multi-deck randomization** — currently the loop stage builds one session
   ordering. For 8-hour videos with many clips, shuffling the order each cycle
   would further reduce perceived repetition. Plumb as a v3 feature only if
@@ -244,6 +272,14 @@ clip deck is the lever for cost. ffmpeg renders are free but consume CPU/SSD.
 - **Cost guards**: any new generative stage MUST default to a small count
   (1–6) and require an explicit flag/argument to scale up. Never default to
   generating 20 of something.
+- **One canonical name per artifact**: the artifact ID the user types on the
+  CLI must equal the filename stem on disk. Clip IDs are `img_01_01` (not
+  `clip_001`) so the file `clips/img_01_01.mp4` is unambiguous. When adding a
+  new artifact type, follow this rule.
+- **Always back up before overwrite**: any operation that regenerates a
+  user-reviewed artifact (image, clip, SFX) must rename the previous version
+  to `<stem>.bak<ts>.<ext>` first. Losing user-approved work because of a
+  blind overwrite is the worst kind of UX failure here.
 
 ## Environment quirks
 
@@ -264,3 +300,21 @@ clip deck is the lever for cost. ffmpeg renders are free but consume CPU/SSD.
 - `loop_concat` uses `-c:v copy`. Reason: 8-hour H.264 re-encode is a 5–10
   minute job; copy is instantaneous and the upstream stages already produced
   the correct format.
+- Clip IDs were unified with their filenames (`img_01_01` instead of
+  `clip_001`). Reason: user had to juggle two parallel naming schemes — the
+  CLI ID vs. the filename — and got annoyed translating between them. ID ==
+  filename stem now.
+- All `regen` commands back up the prior artifact before overwriting.
+  Reason: a blind overwrite in an early regen wiped a clip the user wanted to
+  keep. Lost user work is the cardinal sin here, so backup-on-write is now
+  enforced in code, not convention.
+- Default Kling negative prompt now suppresses random sparkles, dust motes,
+  ambient light pulses across the room, ember showers, and "snowflakes
+  indoors." Reason: Kling's defaults love these artifacts and they look
+  unnatural in long ambient shots. Add new project-specific suppressions to
+  the negative prompt before regenerating clips.
+- `--no-music` flag added to the audio stage. Reason: some videos (nature
+  scenes with strong primary SFX, e.g. brook foreground) read as more
+  authentic with no music bed at all. The plan generator sets `music_mood:
+  "None — no background music"` for these but the CLI still needs the flag
+  to honor it.

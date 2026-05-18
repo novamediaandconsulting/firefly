@@ -54,7 +54,12 @@ def generate_clip(
     *,
     model: str = "fal-ai/kling-video/v3/pro/image-to-video",
     duration: str = "5",
-    negative_prompt: str = "blur, distort, low quality, glitching, morphing faces, deformed",
+    negative_prompt: str = (
+        "blur, distort, low quality, glitching, morphing, deformed, "
+        "random sparkles, glittering particles, floating dust motes, "
+        "ambient light pulses across the room, ember showers, flying sparks, "
+        "snowflakes inside the room, snow indoors, lens flares"
+    ),
     generate_audio: bool = False,
 ) -> tuple[bytes, dict]:
     """Generate a single image-to-video clip. Returns (mp4_bytes, metadata).

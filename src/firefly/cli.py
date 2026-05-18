@@ -27,6 +27,8 @@ app = typer.Typer(
 )
 approve_app = typer.Typer(no_args_is_help=True, help="Mark image/clip candidates as approved.")
 app.add_typer(approve_app, name="approve")
+regen_app = typer.Typer(no_args_is_help=True, help="Regenerate a single artifact in place.")
+app.add_typer(regen_app, name="regen")
 
 console = Console()
 
@@ -145,6 +147,37 @@ def approve_clips(
     console.print(f"[green]approved[/green] {len(found)} clip(s): {sorted(found)}")
 
 
+@regen_app.command("image")
+def regen_image_cmd(
+    slug: str,
+    image_id: Annotated[str, typer.Argument(help="Image ID to regenerate (e.g. img_03).")],
+    prompt: Annotated[str | None, typer.Option("--prompt", "-p", help="New prompt; omit to re-roll existing.")] = None,
+) -> None:
+    """Re-generate a single image in place. Backs up the previous version."""
+    images_stage.regen(_load(slug), image_id, prompt=prompt)
+
+
+@regen_app.command("clip")
+def regen_clip(
+    slug: str,
+    clip_id: Annotated[str, typer.Argument(help="Clip ID to regenerate (e.g. img_01_01).")],
+    prompt: Annotated[str | None, typer.Option("--prompt", "-p", help="New prompt; omit to re-roll existing.")] = None,
+) -> None:
+    """Re-generate a single clip in place. Useful during QA iteration."""
+    clips_stage.regen(_load(slug), clip_id, prompt=prompt)
+
+
+@regen_app.command("sfx")
+def regen_sfx_cmd(
+    slug: str,
+    layer_name: Annotated[str, typer.Argument(help='SFX layer name from plan.json (e.g. "Babbling Brook — Foreground").')],
+    prompt: Annotated[str | None, typer.Option("--prompt", "-p", help="New prompt; omit to re-roll existing.")] = None,
+    variations: Annotated[int, typer.Option("--variations", "-n", help="How many variations to generate.")] = 3,
+) -> None:
+    """Generate N variations of a single SFX layer for A/B/C comparison."""
+    audio_stage.regen_sfx(_load(slug), layer_name, prompt=prompt, variations=variations)
+
+
 # ---------- loop / audio / mux ----------
 
 @app.command()
@@ -162,6 +195,7 @@ def audio(
     slug: str,
     silent: Annotated[bool, typer.Option("--silent", help="Skip music & SFX; produce silence.")] = False,
     stock: Annotated[bool, typer.Option("--stock", help="Use stock music in assets/music/ instead of generating.")] = False,
+    no_music: Annotated[bool, typer.Option("--no-music", help="SFX only; no music bed.")] = False,
     skip_sfx: Annotated[bool, typer.Option("--skip-sfx", help="Music only; no SFX layers.")] = False,
     force: Annotated[bool, typer.Option("--force")] = False,
 ) -> None:
@@ -169,7 +203,10 @@ def audio(
 
     Default: generate music via fal (CassetteAI), layer SFX via ElevenLabs.
     """
-    audio_stage.run(_load(slug), silent=silent, stock=stock, skip_sfx=skip_sfx, force=force)
+    audio_stage.run(
+        _load(slug), silent=silent, stock=stock, no_music=no_music,
+        skip_sfx=skip_sfx, force=force,
+    )
 
 
 @app.command()

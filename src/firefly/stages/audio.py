@@ -30,6 +30,7 @@ def run(
     *,
     silent: bool = False,
     stock: bool = False,
+    no_music: bool = False,
     skip_sfx: bool = False,
     force: bool = False,
 ) -> None:
@@ -60,9 +61,12 @@ def run(
             ])
             layers.append((silent_path, 0.0))
         else:
-            music_path = _get_music_bed(project, plan, prefer_stock=stock)
-            console.print(f"[bold]audio[/bold] music bed: {music_path.name}")
-            layers.append((music_path, 0.0))
+            if no_music:
+                console.print("[bold]audio[/bold] --no-music: SFX layers only")
+            else:
+                music_path = _get_music_bed(project, plan, prefer_stock=stock)
+                console.print(f"[bold]audio[/bold] music bed: {music_path.name}")
+                layers.append((music_path, 0.0))
 
             if not skip_sfx and plan and plan.sfx_layers:
                 if os.getenv("ELEVENLABS_API_KEY"):
@@ -136,3 +140,61 @@ def _get_music_bed(project: Project, plan, *, prefer_stock: bool) -> Path:
 
 def _safe(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "_" for c in name).lower()
+
+
+def regen_sfx(
+    project: Project,
+    layer_name: str,
+    *,
+    prompt: str | None = None,
+    variations: int = 3,
+) -> None:
+    """Generate N variations of a single SFX layer for A/B/C comparison.
+
+    Variations land at `intermediate/sfx_<slug>_v1.mp3`, `_v2.mp3`, etc.
+    The canonical `sfx_<slug>.mp3` (used in the final mix) is NOT touched —
+    when you pick a winner, copy it over the canonical and re-run audio + mux.
+    If `--prompt` is given, the plan's stored prompt for this layer is updated.
+    """
+    plan = project.load_plan()
+    layer = next((l for l in plan.sfx_layers if l.name == layer_name), None)
+    if layer is None:
+        names = [l.name for l in plan.sfx_layers]
+        raise RuntimeError(
+            f"SFX layer '{layer_name}' not found. Available:\n  - "
+            + "\n  - ".join(names)
+        )
+
+    used_prompt = prompt or layer.prompt
+    safe = _safe(layer_name)
+    console.print(
+        f"[bold]regen sfx[/bold] '{layer_name}' — generating {variations} variation(s)…"
+    )
+    if prompt:
+        console.print(f"  new prompt: {used_prompt[:120]}{'…' if len(used_prompt) > 120 else ''}")
+
+    files: list[Path] = []
+    for i in range(1, variations + 1):
+        out = project.intermediate_dir / f"sfx_{safe}_v{i}.mp3"
+        console.print(f"  v{i}…", end=" ")
+        mp3 = elevenlabs.generate_sfx(used_prompt, duration_s=30.0, loop=True)
+        out.write_bytes(mp3)
+        files.append(out)
+        console.print("[green]ok[/green]")
+
+    if prompt:
+        layer.prompt = used_prompt
+        project.save_plan(plan)
+        console.print("  updated plan.json with new prompt")
+
+    canonical = project.intermediate_dir / f"sfx_{safe}.mp3"
+    console.print(f"\n[green]done[/green] — {len(files)} variation(s) ready")
+    for f in files:
+        console.print(f"  {f.name}")
+    console.print(
+        f"\nWhen you pick one, swap it in:\n"
+        f"  [cyan]cp projects/{project.slug}/intermediate/sfx_{safe}_v<N>.mp3 "
+        f"projects/{project.slug}/intermediate/{canonical.name}[/cyan]\n"
+        f"  [cyan]firefly audio {project.slug} --force[/cyan]\n"
+        f"  [cyan]firefly mux {project.slug} --force[/cyan]"
+    )
