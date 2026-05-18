@@ -89,6 +89,7 @@ export interface ClipManifest {
 
 export interface MixConfig {
   layer_gains: Record<string, number>;
+  disabled_layers: string[];
   use_music: boolean;
 }
 

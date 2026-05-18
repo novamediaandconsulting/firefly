@@ -27,7 +27,7 @@ export default function ClipsStep({
 }) {
   const { slug } = use(params);
   const queryClient = useQueryClient();
-  const [perImage, setPerImage] = useState(3);
+  const [perImage, setPerImage] = useState(1);
   const [regenTarget, setRegenTarget] = useState<ClipItem | null>(null);
   const [regenPrompt, setRegenPrompt] = useState("");
 
@@ -47,9 +47,9 @@ export default function ClipsStep({
   const approvedIds = new Set(items.filter((c) => c.approved).map((c) => c.id));
 
   const generate = useMutation({
-    mutationFn: () => api.generateClips(slug, perImage, false),
+    mutationFn: (count: number) => api.generateClips(slug, count, false),
     onSuccess: () => {
-      toast.success("Clips generated");
+      toast.success("Clip(s) generated");
       queryClient.invalidateQueries({ queryKey: ["clips", slug] });
       queryClient.invalidateQueries({ queryKey: ["project", slug] });
       queryClient.invalidateQueries({ queryKey: ["cost", slug] });
@@ -146,11 +146,15 @@ export default function ClipsStep({
         <CardContent className="py-4 flex items-center gap-4">
           <div className="flex-1">
             <Label htmlFor="count" className="text-xs">
-              How many clips to generate per approved image
+              {items.length === 0
+                ? "How many clips to start with"
+                : "Generate another batch"}
             </Label>
             <p className="text-xs text-muted-foreground mt-1">
-              ~$1.12 per 10-sec clip (Kling v3 pro, audio off). You&apos;ll
-              get {perImage * approvedImages.length} clips total.
+              ~$1.12 per 10-sec clip (Kling v3 pro, audio off). Default is 1
+              — generate more if the first doesn&apos;t land.
+              {approvedImages.length > 1 &&
+                ` × ${approvedImages.length} approved images = ${perImage * approvedImages.length} total`}
             </p>
           </div>
           <Input
@@ -165,10 +169,14 @@ export default function ClipsStep({
             className="w-24"
           />
           <Button
-            onClick={() => generate.mutate()}
+            onClick={() => generate.mutate(perImage)}
             disabled={generate.isPending}
           >
-            {generate.isPending ? "Generating…" : `Generate ${perImage * approvedImages.length}`}
+            {generate.isPending
+              ? "Generating…"
+              : items.length === 0
+              ? `Generate ${perImage}`
+              : `Generate ${perImage} more`}
           </Button>
         </CardContent>
       </Card>

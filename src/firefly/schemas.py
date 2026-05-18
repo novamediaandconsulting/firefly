@@ -95,13 +95,16 @@ class MixConfig(BaseModel):
     """Per-layer gain overrides for the final audio mix.
 
     Stored at `projects/<slug>/mix.json`. Layers without an entry use the gain
-    defined in plan.sfx_layers (or 0.0 for music). The wizard's step 7 writes
+    defined in plan.sfx_layers (or 0.0 for music). The wizard's mix step writes
     this file when the user locks the mix.
 
-    `use_music` is set in step 6 (music) — if False, the music bed is excluded
-    from the mix entirely (renders effectively in "no-music" audio_mode).
+    `use_music` (set in the music step) excludes the music bed entirely.
+    `disabled_layers` lists SFX layer names (or MUSIC_GAIN_KEY for music) that
+    are excluded from the mix regardless of gain — re-enabling later just
+    flips them back in without regenerating audio.
     """
     layer_gains: dict[str, float] = Field(default_factory=dict)
+    disabled_layers: list[str] = Field(default_factory=list)
     use_music: bool = True
 
     def gain_for_sfx(self, sfx: "SFXLayer") -> float:
@@ -109,6 +112,9 @@ class MixConfig(BaseModel):
 
     def gain_for_music(self, default: float = 0.0) -> float:
         return self.layer_gains.get(MUSIC_GAIN_KEY, default)
+
+    def is_disabled(self, layer_key: str) -> bool:
+        return layer_key in self.disabled_layers
 
 
 class FinalVariant(BaseModel):

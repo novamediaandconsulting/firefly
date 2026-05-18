@@ -86,11 +86,15 @@ def run(
                 )
             layers.append((stock, mix_cfg.gain_for_music(0.0)))
         elif audio_mode != "no-music":
-            music_bed = project.intermediate_dir / "music_bed.wav"
-            if music_bed.exists():
-                layers.append((music_bed, mix_cfg.gain_for_music(0.0)))
+            from ..schemas import MUSIC_GAIN_KEY
+            if mix_cfg.use_music and not mix_cfg.is_disabled(MUSIC_GAIN_KEY):
+                music_bed = project.intermediate_dir / "music_bed.wav"
+                if music_bed.exists():
+                    layers.append((music_bed, mix_cfg.gain_for_music(0.0)))
 
         for sfx in plan.sfx_layers:
+            if mix_cfg.is_disabled(sfx.name):
+                continue
             sfx_path = project.intermediate_dir / f"sfx_{_safe(sfx.name)}.mp3"
             if sfx_path.exists():
                 layers.append((sfx_path, mix_cfg.gain_for_sfx(sfx)))

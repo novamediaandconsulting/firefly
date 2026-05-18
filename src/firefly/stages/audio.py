@@ -65,8 +65,15 @@ def run(
             ])
             layers.append((silent_path, 0.0))
         else:
-            if no_music:
-                console.print("[bold]audio[/bold] --no-music: SFX layers only")
+            from ..schemas import MUSIC_GAIN_KEY
+            include_music = not no_music and mix_cfg.use_music and not mix_cfg.is_disabled(MUSIC_GAIN_KEY)
+            if not include_music:
+                console.print(
+                    "[bold]audio[/bold] music disabled: " +
+                    ("--no-music" if no_music else
+                     "mix.use_music=false" if not mix_cfg.use_music else
+                     "music layer disabled in mix")
+                )
             else:
                 music_path = _ensure_music_bed(
                     project, plan, prefer_stock=stock, variations=music_variations
@@ -79,6 +86,9 @@ def run(
                 if os.getenv("ELEVENLABS_API_KEY"):
                     for sfx in plan.sfx_layers:
                         sfx_path = _ensure_sfx_layer(project, sfx, variations=sfx_variations)
+                        if mix_cfg.is_disabled(sfx.name):
+                            console.print(f"  {sfx.name}: disabled in mix")
+                            continue
                         gain = mix_cfg.gain_for_sfx(sfx)
                         if gain != sfx.gain_db:
                             console.print(f"  {sfx.name}: {sfx.gain_db}dB (plan) → {gain}dB (mix override)")
@@ -250,29 +260,34 @@ def mix_preview(
     overrides: dict[str, float],
     *,
     duration_s: int = 60,
+    disabled_layers: list[str] | None = None,
 ) -> Path:
     """Render a short audio preview with per-layer gain overrides.
 
     Doesn't change anything stored — just writes intermediate/mix_preview.mp3.
-    Used by both the CLI and the web app's mix board.
+    Used by both the CLI and the web app's mix board. `disabled_layers` (list
+    of layer names or MUSIC_GAIN_KEY) excludes those layers from the preview.
     """
     plan = project.load_plan()
+    disabled = set(disabled_layers or [])
     layers: list[tuple[Path, float]] = []
 
+    from ..schemas import MUSIC_GAIN_KEY
     music_bed = project.intermediate_dir / "music_bed.wav"
-    if music_bed.exists():
-        from ..schemas import MUSIC_GAIN_KEY
+    if music_bed.exists() and MUSIC_GAIN_KEY not in disabled:
         music_gain = overrides.get(MUSIC_GAIN_KEY, overrides.get("music", 0.0))
         layers.append((music_bed, music_gain))
 
     for sfx in plan.sfx_layers:
+        if sfx.name in disabled:
+            continue
         sfx_path = project.intermediate_dir / f"sfx_{_safe(sfx.name)}.mp3"
         if sfx_path.exists():
             gain = overrides.get(sfx.name, sfx.gain_db)
             layers.append((sfx_path, gain))
 
     if not layers:
-        raise RuntimeError("no audio layers available — generate audio first")
+        raise RuntimeError("no audio layers enabled — re-enable a layer first")
 
     console.print(f"[bold]mix preview[/bold] mixing {len(layers)} layer(s) for {duration_s}s:")
     for path, gain in layers:

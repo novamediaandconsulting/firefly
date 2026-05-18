@@ -14,6 +14,7 @@ router = APIRouter(prefix="/api/projects/{slug}/mix", tags=["mix"])
 
 class MixPreviewRequest(BaseModel):
     layer_gains: dict[str, float]
+    disabled_layers: list[str] = []
     duration_s: int = 60
 
 
@@ -21,7 +22,11 @@ class MixPreviewRequest(BaseModel):
 def mix_preview(slug: str, req: MixPreviewRequest) -> dict:
     """Render a short preview MP3 with overridden gains. Returns the file URL."""
     proj = load_project(slug)
-    audio_stage.mix_preview(proj, req.layer_gains, duration_s=req.duration_s)
+    audio_stage.mix_preview(
+        proj, req.layer_gains,
+        disabled_layers=req.disabled_layers,
+        duration_s=req.duration_s,
+    )
     return {
         "preview": str(proj.mix_preview_path.relative_to(proj.root)),
     }

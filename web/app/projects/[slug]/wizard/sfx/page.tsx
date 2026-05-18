@@ -163,8 +163,9 @@ function SfxLayerCard({
                     {isPicked && <Badge>picked</Badge>}
                   </div>
                   <audio
-                    src={projectFileUrl(slug, v.path.replace(/^.*?\//, ""))}
+                    src={projectFileUrl(slug, v.path)}
                     controls
+                    preload="none"
                     className="w-full h-8"
                   />
                   <Button

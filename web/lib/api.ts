@@ -194,10 +194,19 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(mix),
     }),
-  mixPreview: (slug: string, layerGains: Record<string, number>, durationS = 60) =>
+  mixPreview: (
+    slug: string,
+    layerGains: Record<string, number>,
+    disabledLayers: string[] = [],
+    durationS = 60,
+  ) =>
     request<{ preview: string }>(`/api/projects/${slug}/mix/preview`, {
       method: "POST",
-      body: JSON.stringify({ layer_gains: layerGains, duration_s: durationS }),
+      body: JSON.stringify({
+        layer_gains: layerGains,
+        disabled_layers: disabledLayers,
+        duration_s: durationS,
+      }),
     }),
 
   // ---- render / variants ----

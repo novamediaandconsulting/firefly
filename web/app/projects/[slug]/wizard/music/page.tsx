@@ -54,6 +54,7 @@ export default function MusicStep({
     mutationFn: (useMusic: boolean) =>
       api.lockMix(slug, {
         layer_gains: mixQ.data?.layer_gains ?? {},
+        disabled_layers: mixQ.data?.disabled_layers ?? [],
         use_music: useMusic,
       }),
     onSuccess: () => {
@@ -167,8 +168,9 @@ export default function MusicStep({
                           {isPicked && <Badge>picked</Badge>}
                         </div>
                         <audio
-                          src={projectFileUrl(slug, v.path.replace(/^.*?\//, ""))}
+                          src={projectFileUrl(slug, v.path)}
                           controls
+                          preload="none"
                           className="w-full h-8"
                         />
                         <Button
