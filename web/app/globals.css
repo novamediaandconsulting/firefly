@@ -49,24 +49,26 @@
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  /* Warm cream background with a subtle amber tint instead of pure white */
+  --background: oklch(0.985 0.008 75);
+  --foreground: oklch(0.16 0.02 50);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.16 0.02 50);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.16 0.02 50);
+  /* Primary is amber — Tailwind amber-500 in oklch */
+  --primary: oklch(0.74 0.16 75);
+  --primary-foreground: oklch(0.16 0.02 50);
+  --secondary: oklch(0.96 0.015 75);
+  --secondary-foreground: oklch(0.16 0.02 50);
+  --muted: oklch(0.96 0.012 75);
+  --muted-foreground: oklch(0.5 0.02 60);
+  --accent: oklch(0.96 0.04 75);
+  --accent-foreground: oklch(0.25 0.05 60);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --border: oklch(0.9 0.018 75);
+  --input: oklch(0.9 0.018 75);
+  --ring: oklch(0.74 0.16 75);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -84,24 +86,25 @@
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  /* Warm near-black, deeper amber primary */
+  --background: oklch(0.14 0.015 40);
+  --foreground: oklch(0.97 0.01 75);
+  --card: oklch(0.2 0.02 40);
+  --card-foreground: oklch(0.97 0.01 75);
+  --popover: oklch(0.2 0.02 40);
+  --popover-foreground: oklch(0.97 0.01 75);
+  --primary: oklch(0.78 0.17 75);
+  --primary-foreground: oklch(0.16 0.02 40);
+  --secondary: oklch(0.27 0.025 40);
+  --secondary-foreground: oklch(0.97 0.01 75);
+  --muted: oklch(0.25 0.02 40);
+  --muted-foreground: oklch(0.7 0.02 75);
+  --accent: oklch(0.32 0.06 75);
+  --accent-foreground: oklch(0.97 0.01 75);
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --border: oklch(1 0 0.02 / 12%);
+  --input: oklch(1 0 0.02 / 16%);
+  --ring: oklch(0.78 0.17 75);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -121,10 +124,24 @@
   * {
     @apply border-border outline-ring/50;
   }
-  body {
-    @apply bg-background text-foreground;
-  }
   html {
     @apply font-sans;
+    font-size: 17px;  /* bumped from default 16px for a more modern, readable feel */
   }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "ss01", "cv11";  /* tighter Geist alternates */
+  }
+  h1, h2, h3, h4 {
+    @apply font-bold tracking-tight;
+    letter-spacing: -0.02em;
+  }
+  h1 { @apply text-3xl sm:text-4xl; }
+  h2 { @apply text-2xl sm:text-3xl; }
+  h3 { @apply text-xl sm:text-2xl; }
+}
+
+/* Selection in amber for brand consistency */
+::selection {
+  background-color: oklch(0.74 0.16 75 / 0.4);
 }
