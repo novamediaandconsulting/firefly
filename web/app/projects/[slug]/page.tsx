@@ -103,9 +103,14 @@ export default function ProjectDetailPage({
             )}
           </div>
         </div>
-        <Button asChild>
-          <Link href={`/projects/${slug}/wizard`}>Continue in wizard →</Link>
-        </Button>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <Button asChild variant="outline" size="sm">
+            <Link href={`/projects/${slug}/gallery/images`}>Image library</Link>
+          </Button>
+          <Button asChild>
+            <Link href={`/projects/${slug}/wizard`}>Continue in wizard →</Link>
+          </Button>
+        </div>
       </div>
 
       <Card>

@@ -74,6 +74,26 @@ export interface ImageManifest {
   items: ImageItem[];
 }
 
+export interface GalleryImage {
+  filename: string;
+  path: string;
+  base_id: string;
+  is_current: boolean;
+  timestamp: number | null;
+  prompt: string;
+  approved: boolean;
+}
+
+export interface GalleryGroup {
+  base_id: string;
+  items: GalleryImage[];
+}
+
+export interface ImageGalleryResponse {
+  groups: GalleryGroup[];
+  extras: GalleryImage[];
+}
+
 export interface ClipItem {
   id: string;
   image_id: string;

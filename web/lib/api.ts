@@ -8,6 +8,7 @@ import type {
   CostSummary,
   CreateProjectRequest,
   FinalVariants,
+  ImageGalleryResponse,
   ImageManifest,
   MixConfig,
   MusicState,
@@ -94,6 +95,8 @@ export const api = {
       `/api/projects/${slug}/images/${imageId}/regen`,
       { method: "POST", body: JSON.stringify({ prompt: prompt ?? null }) },
     ),
+  getImageGallery: (slug: string) =>
+    request<ImageGalleryResponse>(`/api/projects/${slug}/images/gallery`),
 
   // ---- clips ----
   getClips: (slug: string) =>
