@@ -164,6 +164,7 @@ def _ensure_music_bed(
         console.print("[green]ok[/green]")
 
     shutil.copy(project.intermediate_dir / "music_bed_v1.wav", canonical)
+    write_pick(canonical, "v1")
     console.print(
         f"  using v1 as canonical "
         f"(switch with: [cyan]firefly pick music {project.slug} v<N>[/cyan])"
@@ -209,6 +210,7 @@ def _ensure_sfx_layer(project: Project, sfx: SFXLayer, *, variations: int) -> Pa
         console.print("[green]ok[/green]")
 
     shutil.copy(project.intermediate_dir / f"sfx_{safe}_v1.mp3", canonical)
+    write_pick(canonical, "v1")
     console.print(
         f"  using v1 as canonical for '{sfx.name}' "
         f"(switch with: [cyan]firefly pick sfx {project.slug} \"{sfx.name}\" v<N>[/cyan])"
@@ -236,6 +238,7 @@ def pick_sfx(project: Project, layer_name: str, variation: str) -> None:
         canonical.rename(backup)
         console.print(f"  backed up canonical → {backup.name}")
     shutil.copy(var, canonical)
+    write_pick(canonical, variation)
     console.print(f"[green]picked[/green] {var.name} → {canonical.name}")
     console.print(
         f"  next: [cyan]firefly audio {project.slug} --force && firefly mux {project.slug} --force[/cyan]"
@@ -308,6 +311,7 @@ def pick_music(project: Project, variation: str) -> None:
         canonical.rename(backup)
         console.print(f"  backed up canonical → {backup.name}")
     shutil.copy(var, canonical)
+    write_pick(canonical, variation)
     console.print(f"[green]picked[/green] {var.name} → {canonical.name}")
     console.print(
         f"  next: [cyan]firefly audio {project.slug} --force && firefly mux {project.slug} --force[/cyan]"
@@ -316,6 +320,98 @@ def pick_music(project: Project, variation: str) -> None:
 
 def _safe(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "_" for c in name).lower()
+
+
+def _pick_file(canonical: Path) -> Path:
+    """Sidecar file tracking which variation is currently the canonical.
+
+    For `intermediate/sfx_brook.mp3` this is `intermediate/sfx_brook.pick`,
+    containing e.g. "v2". Lets the UI show the current pick without comparing
+    file bytes.
+    """
+    return canonical.parent / f"{canonical.stem}.pick"
+
+
+def read_pick(canonical: Path) -> str | None:
+    pf = _pick_file(canonical)
+    return pf.read_text().strip() if pf.exists() else None
+
+
+def write_pick(canonical: Path, variation: str) -> None:
+    _pick_file(canonical).write_text(variation)
+
+
+def list_sfx_variations(project: Project) -> list[dict]:
+    """List per-layer SFX variations + current pick. Used by GET /api/.../sfx."""
+    if not project.plan_path.exists():
+        return []
+    plan = project.load_plan()
+    out = []
+    for sfx in plan.sfx_layers:
+        safe = _safe(sfx.name)
+        canonical = project.intermediate_dir / f"sfx_{safe}.mp3"
+        variations = []
+        for v in range(1, 21):
+            variation = project.intermediate_dir / f"sfx_{safe}_v{v}.mp3"
+            if not variation.exists():
+                break
+            variations.append({
+                "id": f"v{v}",
+                "path": str(variation.relative_to(project.root)),
+            })
+        out.append({
+            "name": sfx.name,
+            "prompt": sfx.prompt,
+            "gain_db": sfx.gain_db,
+            "canonical_path": str(canonical.relative_to(project.root)) if canonical.exists() else None,
+            "current_variation": read_pick(canonical) if canonical.exists() else None,
+            "variations": variations,
+        })
+    return out
+
+
+def ensure_all_sfx_variations(project: Project, *, variations: int = 3) -> None:
+    """Generate (or reuse) N variations for every SFX layer in the plan.
+
+    Lightweight wrapper that doesn't mix or render audio_track — purely about
+    making sure intermediate/sfx_*_v*.mp3 files exist. Used by the wizard's
+    SFX step.
+    """
+    if not os.getenv("ELEVENLABS_API_KEY"):
+        raise RuntimeError(
+            "ELEVENLABS_API_KEY is not set. Add it to .env. "
+            "Get a key at https://elevenlabs.io/app/settings/api-keys"
+        )
+    plan = project.load_plan()
+    for sfx in plan.sfx_layers:
+        _ensure_sfx_layer(project, sfx, variations=variations)
+
+
+def ensure_music_variations(project: Project, *, variations: int = 3) -> None:
+    """Generate (or reuse) N music bed variations. No mix."""
+    plan = project.load_plan()
+    _ensure_music_bed(project, plan, prefer_stock=False, variations=variations)
+
+
+def list_music_variations(project: Project) -> dict:
+    """List music variations + current pick. Used by GET /api/.../music."""
+    plan = project.load_plan() if project.plan_path.exists() else None
+    canonical = project.intermediate_dir / "music_bed.wav"
+    variations = []
+    for v in range(1, 21):
+        variation = project.intermediate_dir / f"music_bed_v{v}.wav"
+        if not variation.exists():
+            break
+        variations.append({
+            "id": f"v{v}",
+            "path": str(variation.relative_to(project.root)),
+        })
+    return {
+        "music_mood": plan.music_mood if plan else "",
+        "canonical_path": str(canonical.relative_to(project.root)) if canonical.exists() else None,
+        "current_variation": read_pick(canonical) if canonical.exists() else None,
+        "variations": variations,
+    }
 
 
 def regen_sfx(

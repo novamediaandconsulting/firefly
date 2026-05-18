@@ -10,8 +10,10 @@ import type {
   FinalVariants,
   ImageManifest,
   MixConfig,
+  MusicState,
   Plan,
   ProjectSummary,
+  SfxState,
   State,
 } from "./types";
 
@@ -106,6 +108,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ ids }),
     }),
+  unapproveClips: (slug: string, ids: string[]) =>
+    request<ClipManifest>(`/api/projects/${slug}/clips/unapprove`, {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
+  unapproveImages: (slug: string, ids: string[]) =>
+    request<ImageManifest>(`/api/projects/${slug}/images/unapprove`, {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
   regenClip: (slug: string, clipId: string, prompt?: string) =>
     request<ClipManifest>(
       `/api/projects/${slug}/clips/${clipId}/regen`,
@@ -137,6 +149,20 @@ export const api = {
       `/api/projects/${slug}/audio`,
       { method: "POST", body: JSON.stringify(opts) },
     ),
+  // ---- sfx / music variations ----
+  getSfx: (slug: string) => request<SfxState>(`/api/projects/${slug}/sfx`),
+  generateSfx: (slug: string, variations = 3) =>
+    request<SfxState>(`/api/projects/${slug}/sfx/generate`, {
+      method: "POST",
+      body: JSON.stringify({ variations }),
+    }),
+  getMusic: (slug: string) => request<MusicState>(`/api/projects/${slug}/music`),
+  generateMusic: (slug: string, variations = 3) =>
+    request<MusicState>(`/api/projects/${slug}/music/generate`, {
+      method: "POST",
+      body: JSON.stringify({ variations }),
+    }),
+
   regenSfx: (slug: string, layerName: string, prompt?: string, variations = 3) =>
     request<{ status: string }>(
       `/api/projects/${slug}/sfx/${encodeURIComponent(layerName)}/regen`,

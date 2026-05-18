@@ -89,6 +89,32 @@ export interface ClipManifest {
 
 export interface MixConfig {
   layer_gains: Record<string, number>;
+  use_music: boolean;
+}
+
+export interface VariationFile {
+  id: string; // "v1", "v2", "v3"
+  path: string;
+}
+
+export interface SfxLayerState {
+  name: string;
+  prompt: string;
+  gain_db: number;
+  canonical_path: string | null;
+  current_variation: string | null;
+  variations: VariationFile[];
+}
+
+export interface SfxState {
+  layers: SfxLayerState[];
+}
+
+export interface MusicState {
+  music_mood: string;
+  canonical_path: string | null;
+  current_variation: string | null;
+  variations: VariationFile[];
 }
 
 export interface FinalVariant {

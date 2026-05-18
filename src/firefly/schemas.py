@@ -97,8 +97,12 @@ class MixConfig(BaseModel):
     Stored at `projects/<slug>/mix.json`. Layers without an entry use the gain
     defined in plan.sfx_layers (or 0.0 for music). The wizard's step 7 writes
     this file when the user locks the mix.
+
+    `use_music` is set in step 6 (music) — if False, the music bed is excluded
+    from the mix entirely (renders effectively in "no-music" audio_mode).
     """
     layer_gains: dict[str, float] = Field(default_factory=dict)
+    use_music: bool = True
 
     def gain_for_sfx(self, sfx: "SFXLayer") -> float:
         return self.layer_gains.get(sfx.name, sfx.gain_db)

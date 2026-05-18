@@ -51,6 +51,44 @@ def regen_sfx(slug: str, layer_name: str, req: RegenSfxRequest) -> dict:
     return {"status": "done"}
 
 
+class GenerateSfxRequest(BaseModel):
+    variations: int = 3
+
+
+@router.post("/sfx/generate")
+def generate_sfx_layers(slug: str, req: GenerateSfxRequest) -> dict:
+    """Generate N variations for every SFX layer in the plan. No mixing."""
+    proj = load_project(slug)
+    audio_stage.ensure_all_sfx_variations(proj, variations=req.variations)
+    return {"layers": audio_stage.list_sfx_variations(proj)}
+
+
+class GenerateMusicRequest(BaseModel):
+    variations: int = 3
+
+
+@router.post("/music/generate")
+def generate_music_variations(slug: str, req: GenerateMusicRequest) -> dict:
+    """Generate N music bed variations. No mixing."""
+    proj = load_project(slug)
+    audio_stage.ensure_music_variations(proj, variations=req.variations)
+    return audio_stage.list_music_variations(proj)
+
+
+@router.get("/sfx")
+def get_sfx_state(slug: str) -> dict:
+    """List per-layer SFX variations + current pick."""
+    proj = load_project(slug)
+    return {"layers": audio_stage.list_sfx_variations(proj)}
+
+
+@router.get("/music")
+def get_music_state(slug: str) -> dict:
+    """List music variations + current pick."""
+    proj = load_project(slug)
+    return audio_stage.list_music_variations(proj)
+
+
 class PickRequest(BaseModel):
     variation: str  # e.g. "v2"
 

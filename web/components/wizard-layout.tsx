@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
+import { api } from "@/lib/api";
 import { WIZARD_STEPS, type WizardStepId, nextStep, prevStep } from "@/lib/wizard";
 
 interface WizardLayoutProps {
@@ -33,6 +35,12 @@ export function WizardLayout({
   const router = useRouter();
   const next = nextStep(step);
   const prev = prevStep(step);
+  const costQ = useQuery({
+    queryKey: ["cost", slug],
+    queryFn: () => api.getCost(slug),
+    retry: false,
+    refetchInterval: 10_000, // refresh during long-running gen steps
+  });
 
   async function handleContinue() {
     if (onContinue) await onContinue();
@@ -42,14 +50,20 @@ export function WizardLayout({
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-8 space-y-8">
-      {/* breadcrumb */}
-      <div>
+      {/* breadcrumb + cost */}
+      <div className="flex items-center justify-between">
         <Link
           href={`/projects/${slug}`}
           className="text-sm text-muted-foreground hover:text-foreground"
         >
           ← back to project
         </Link>
+        {costQ.data && (
+          <div className="text-xs text-muted-foreground">
+            spent <span className="font-mono text-foreground">${costQ.data.total_usd.toFixed(2)}</span>{" "}
+            <span className="opacity-60">on this project</span>
+          </div>
+        )}
       </div>
 
       {/* step indicator */}

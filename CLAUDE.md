@@ -282,14 +282,34 @@ stage functions. Phased build:
     Finals list). All client components using TanStack Query.
   - `dev.sh` runs `firefly api` (8000) + `npm run dev` (3000) side by side
     with Ctrl-C killing both.
-- **Phases 4–7: 9-step wizard** — concept → plan → refine → images →
-  clips → SFX → music → mix board → final variants. Cost tracker in header.
+- **Phases 4–7: 9-step wizard** ✅ DONE
+  - `web/app/projects/[slug]/wizard/[step]/page.tsx` per step (plan, images,
+    clips, sfx, music, mix, final).
+  - `WizardLayout` (in `web/components/wizard-layout.tsx`) provides the
+    clickable step indicator, back/continue nav, and a live spend badge that
+    refetches `/api/projects/<slug>/cost` every 10s.
+  - All counts (image candidates, clips per image, SFX variations, music
+    variations) are exposed in the UI so the user controls scope per step.
+  - Per-artifact regen everywhere (image, clip, SFX) with backup-on-write.
+  - Mix step: live sliders + "Render 60s preview" + "Lock mix".
+  - Final step: render named variants (e.g. "30min", "8hr_no_music") from
+    locked sources — pure ffmpeg, no API spend.
+  - SFX/music canonical tracked via sidecar `.pick` files (e.g.
+    `sfx_brook.pick` contains `"v2"`) so the UI knows the current pick
+    without comparing bytes.
 
 ## What's still not built
 
 - **Metadata stage** (Claude → `youtube.json` with title, description, tags,
   AI-disclosure boilerplate). Scaffolding is there but the stage module isn't
   wired up.
+- **SSE progress streaming** — long-running stages (long renders, big SFX
+  batches) currently block the request. Adding SSE on
+  `/api/projects/<slug>/stream` would let the UI show real-time progress
+  and not lock up during 8-hour renders.
+- **Background job queue** — renders that take >60s should run as
+  background tasks with status polled separately. Today the wizard's
+  final-render mutation just blocks on the response.
 - **Multi-deck randomization** — currently the loop stage builds one session
   ordering. For 8-hour videos with many clips, shuffling the order each cycle
   would further reduce perceived repetition. Plumb as a v3 feature only if

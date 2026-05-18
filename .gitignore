@@ -22,9 +22,10 @@ env/
 .env.local
 .env.*.local
 
-# Firefly project outputs (videos, images, audio — can be huge)
-projects/
-!projects/.gitkeep
+# Firefly project outputs (videos, images, audio — can be huge).
+# Anchor to repo root so the pattern doesn't match web/app/projects/.
+/projects/
+!/projects/.gitkeep
 
 # Stock assets the user provides — keep folder, ignore contents
 assets/music/*

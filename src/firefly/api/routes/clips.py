@@ -53,6 +53,17 @@ def approve_clips(slug: str, req: ApproveRequest) -> ClipManifest:
     return manifest
 
 
+@router.post("/unapprove", response_model=ClipManifest)
+def unapprove_clips(slug: str, req: ApproveRequest) -> ClipManifest:
+    proj = load_project(slug)
+    manifest = proj.load_clip_manifest()
+    for item in manifest.items:
+        if item.id in req.ids:
+            item.approved = False
+    proj.save_clip_manifest(manifest)
+    return manifest
+
+
 class RegenClipRequest(BaseModel):
     prompt: str | None = None
 
