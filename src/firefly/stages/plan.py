@@ -2,6 +2,7 @@ from datetime import datetime
 
 from rich.console import Console
 
+from .. import costs
 from ..project import Project
 from ..providers import claude
 from ..schemas import StageStatus
@@ -22,6 +23,10 @@ def run(project: Project, *, force: bool = False) -> None:
 
     try:
         plan = claude.generate_plan(state.concept, state.config.plan_model)
+        costs.record(
+            project, provider="anthropic", model=state.config.plan_model,
+            stage="plan", artifact_id="plan.json",
+        )
     except Exception as e:
         stage.status = StageStatus.FAILED
         stage.error = str(e)

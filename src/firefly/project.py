@@ -7,7 +7,9 @@ from pathlib import Path
 from .config import PROJECTS_ROOT
 from .schemas import (
     ClipManifest,
+    FinalVariants,
     ImageManifest,
+    MixConfig,
     Plan,
     ProjectConfig,
     State,
@@ -68,6 +70,22 @@ class Project:
     def youtube_path(self) -> Path:
         return self.root / "youtube.json"
 
+    @property
+    def mix_path(self) -> Path:
+        return self.root / "mix.json"
+
+    @property
+    def mix_preview_path(self) -> Path:
+        return self.intermediate_dir / "mix_preview.mp3"
+
+    @property
+    def final_variants_path(self) -> Path:
+        return self.root / "final_variants.json"
+
+    @property
+    def costs_path(self) -> Path:
+        return self.root / "costs.jsonl"
+
     # ---- existence ----
     def exists(self) -> bool:
         return self.state_path.exists()
@@ -125,6 +143,24 @@ class Project:
 
     def save_clip_manifest(self, manifest: ClipManifest) -> None:
         _atomic_write_text(self.clip_manifest_path, manifest.model_dump_json(indent=2))
+
+    # ---- mix config ----
+    def load_mix(self) -> MixConfig:
+        if not self.mix_path.exists():
+            return MixConfig()
+        return MixConfig.model_validate_json(self.mix_path.read_text())
+
+    def save_mix(self, mix: MixConfig) -> None:
+        _atomic_write_text(self.mix_path, mix.model_dump_json(indent=2))
+
+    # ---- final variants ----
+    def load_final_variants(self) -> FinalVariants:
+        if not self.final_variants_path.exists():
+            return FinalVariants()
+        return FinalVariants.model_validate_json(self.final_variants_path.read_text())
+
+    def save_final_variants(self, variants: FinalVariants) -> None:
+        _atomic_write_text(self.final_variants_path, variants.model_dump_json(indent=2))
 
 
 def _atomic_write_text(path: Path, content: str) -> None:

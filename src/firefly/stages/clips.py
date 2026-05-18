@@ -2,6 +2,7 @@ from datetime import datetime
 
 from rich.console import Console
 
+from .. import costs
 from ..project import Project
 from ..providers import fal
 from ..schemas import ClipItem, ClipManifest, StageStatus
@@ -51,6 +52,10 @@ def regen(project: Project, clip_id: str, *, prompt: str | None = None) -> None:
     image_url = fal.upload_image(project.images_dir / image.filename)
     mp4, _meta = fal.generate_clip(image_url, new_prompt, model=state.config.video_model)
     target_path.write_bytes(mp4)
+    costs.record(
+        project, provider="fal", model=state.config.video_model,
+        stage="clips", artifact_id=clip_id, units=target.duration_s,
+    )
 
     target.prompt = new_prompt
     target.approved = False
@@ -59,7 +64,7 @@ def regen(project: Project, clip_id: str, *, prompt: str | None = None) -> None:
     console.print(f"  re-review then: [cyan]firefly approve clips {project.slug} {clip_id}[/cyan]")
 
 
-def run(project: Project, *, per_image: int = 4, force: bool = False) -> None:
+def run(project: Project, *, per_image: int = 3, force: bool = False) -> None:
     state = project.load_state()
     stage = state.stage("clips")
     if stage.status == StageStatus.DONE and not force:
@@ -76,7 +81,8 @@ def run(project: Project, *, per_image: int = 4, force: bool = False) -> None:
 
     console.print(
         f"[bold]clips[/bold] generating {per_image} per image × {len(approved)} images "
-        f"= {per_image * len(approved)} clips with {state.config.video_model}…"
+        f"= {per_image * len(approved)} × {state.config.clip_duration_s}s clips with "
+        f"{state.config.video_model}…"
     )
     stage.status = StageStatus.IN_PROGRESS
     project.save_state(state)
@@ -99,17 +105,24 @@ def run(project: Project, *, per_image: int = 4, force: bool = False) -> None:
                 prompt = prompt_pool[prompt_index % len(prompt_pool)]
                 prompt_index += 1
                 console.print(f"  {clip_id}…", end=" ")
+                duration_s = float(state.config.clip_duration_s)
                 mp4, _meta = fal.generate_clip(
-                    image_url, prompt, model=state.config.video_model
+                    image_url, prompt,
+                    model=state.config.video_model,
+                    duration=str(state.config.clip_duration_s),
                 )
                 (project.clips_dir / clip_filename).write_bytes(mp4)
+                costs.record(
+                    project, provider="fal", model=state.config.video_model,
+                    stage="clips", artifact_id=clip_id, units=duration_s,
+                )
                 items.append(
                     ClipItem(
                         id=clip_id,
                         image_id=img.id,
                         filename=clip_filename,
                         prompt=prompt,
-                        duration_s=5.0,
+                        duration_s=duration_s,
                     )
                 )
                 console.print("[green]ok[/green]")

@@ -154,19 +154,35 @@ target duration, which is fine — they're ambient.
 # Pipeline (run in order)
 uv run firefly init <slug> "<concept>"               # creates project, no API calls
 uv run firefly plan <slug> [--force]
-uv run firefly images <slug> [-n 6] [--force]        # awaiting_qa after success
+uv run firefly images <slug> [-n 4] [--force]        # awaiting_qa after success
 uv run firefly approve images <slug> img_01 img_03 ...
-uv run firefly clips <slug> [-n 4]                   # n clips per approved image
+uv run firefly clips <slug> [-n 3]                   # n clips per approved image, 10s each
 uv run firefly approve clips <slug> img_01_01 img_03_02 ...
 uv run firefly loop <slug> [--duration-min 480]
 uv run firefly audio <slug> [--silent|--stock|--no-music|--skip-sfx]
+                            [--sfx-variations 3] [--music-variations 3]
 uv run firefly mux <slug>
 uv run firefly status <slug>
+uv run firefly cost <slug>                           # breakdown of spend from costs.jsonl
 
 # QA iteration (re-roll individual artifacts; backs up the previous version)
 uv run firefly regen image <slug> <img_id> [--prompt "..."]
 uv run firefly regen clip  <slug> <clip_id> [--prompt "..."]
 uv run firefly regen sfx   <slug> "<layer name>" [--prompt "..."] [-n 3]
+
+# Pick the winning variation (cp + audio --force is automated under the hood)
+uv run firefly pick sfx   <slug> "<layer name>" v2
+uv run firefly pick music <slug> v2
+
+# Mix board (per-layer gain overrides used by `render`)
+uv run firefly mix preview <slug> -l "_music=-12" -l "Babbling Brook=0" [-d 60]
+uv run firefly mix lock    <slug> -l "_music=-12" -l "Babbling Brook=0"
+uv run firefly mix show    <slug>
+
+# Named final variants (no API calls — reuses source files)
+uv run firefly render   <slug> 30min       -d 30   [--audio-mode default]
+uv run firefly render   <slug> 8hr_silent  -d 480  --audio-mode silent
+uv run firefly variants <slug>             # list registered variants
 ```
 
 The `init` command takes optional `--duration-min`, `--resolution`,
@@ -228,20 +244,36 @@ clip deck is the lever for cost. ffmpeg renders are free but consume CPU/SSD.
   `projects/<slug>/plan.json` `music_mood`, then delete
   `intermediate/music_bed.wav`, then `audio --force`.
 
-## What's not built yet
+## Web app (in progress)
+
+We are building a local web app (Next.js + FastAPI) around the CLI pipeline.
+The CLI stays first-class — every web action is a thin wrapper over the same
+stage functions. Phased build:
+
+- **Phase 1: Pipeline refactor** ✅ DONE
+  - `Plan.image_prompts: list[str]` so each candidate image is meaningfully
+    different (different camera angle / composition / lighting); legacy
+    `image_prompt: str` plans coerce automatically.
+  - Defaults: 3 clips per image, 10s each; 3 SFX variations per layer; 3
+    music variations. All overrideable via flags.
+  - `MixConfig` (mix.json) for per-layer gain overrides; `firefly mix
+    preview/lock/show`.
+  - `FinalVariant` (final_variants.json) tracks named renders; `firefly
+    render <slug> <variant> -d <min>` produces additional final MP4s without
+    redoing the costly stages.
+  - `costs.jsonl` append-only log + `firefly cost`; pricing table in
+    `src/firefly/costs.py`.
+- **Phase 2: FastAPI service** — REST + SSE around every stage. CORS-open
+  for localhost:3000. Static file serving for media.
+- **Phase 3: Next.js scaffold** — project list + detail (read-only).
+- **Phases 4–7: 9-step wizard** — concept → plan → refine → images →
+  clips → SFX → music → mix board → final variants. Cost tracker in header.
+
+## What's still not built
 
 - **Metadata stage** (Claude → `youtube.json` with title, description, tags,
   AI-disclosure boilerplate). Scaffolding is there but the stage module isn't
   wired up.
-- **Web QA UI** (FastAPI + HTMX) — would replace `firefly approve` with a
-  click-through. Stub directory `src/firefly/ui/` is reserved.
-- **`firefly use sfx`** — picking an `regen sfx` variation currently requires
-  a manual `cp <variation> <canonical>`. Wrap that in a `firefly use sfx
-  <slug> <layer> <variation>` command (with backup) when convenient.
-- **Per-render audio mix overrides** — the music+SFX vs SFX-only comparison
-  done for redwood-cabin used an inline Python script. If you find yourself
-  doing that twice, promote it to `firefly preview <slug> [--with-music]
-  [--gains key=db,...]` that writes named final variants.
 - **Multi-deck randomization** — currently the loop stage builds one session
   ordering. For 8-hour videos with many clips, shuffling the order each cycle
   would further reduce perceived repetition. Plumb as a v3 feature only if
@@ -280,6 +312,16 @@ clip deck is the lever for cost. ffmpeg renders are free but consume CPU/SSD.
   user-reviewed artifact (image, clip, SFX) must rename the previous version
   to `<stem>.bak<ts>.<ext>` first. Losing user-approved work because of a
   blind overwrite is the worst kind of UX failure here.
+- **Record every billable call**: a stage that calls a paid API MUST follow
+  the call with `costs.record(project, provider=..., model=..., stage=...,
+  artifact_id=..., units=...)`. Otherwise the cost dashboard lies. Add new
+  (provider, model) pairs to `costs.PRICING` when introducing them.
+- **Variation pattern**: any user-choosable asset (SFX layer, music bed, and
+  the upcoming clip variants) follows the same canonical-vs-variation pattern:
+  generate `<base>_v1.<ext>`, `_v2.<ext>`, … in `intermediate/`, copy v1 over
+  the canonical `<base>.<ext>` as a default. Add a `firefly pick <kind>
+  <slug> [name] vN` command to swap, then `audio --force && mux --force`
+  (or `render`) to remix.
 
 ## Environment quirks
 
@@ -318,3 +360,21 @@ clip deck is the lever for cost. ffmpeg renders are free but consume CPU/SSD.
   authentic with no music bed at all. The plan generator sets `music_mood:
   "None — no background music"` for these but the CLI still needs the flag
   to honor it.
+- Image candidates use 6 varied prompts from Claude (cycled if user wants
+  more) instead of N renders of the same prompt. Reason: earlier batches
+  looked nearly identical because fal randomness alone barely changes the
+  composition — Claude varying camera angle / framing / lighting in the
+  prompt itself gives meaningfully different candidates.
+- Default clip duration bumped 5s → 10s; default per-image count 4 → 3.
+  Reason: a single 10-sec session, once made loopable, gives more visual
+  variety per loop than four 5-sec clips back-to-back; and the user is
+  picking just one anyway, so generating fewer candidates saves money.
+- SFX & music variations are produced by default (3 each), not lazily via
+  a separate `regen` command. Reason: the user almost always wants A/B/C
+  comparison; making it the default avoids a second round trip. `pick sfx`
+  / `pick music` promote the winner; `regen sfx` is still there for when
+  the prompt itself needs revision.
+- Render is split from mux. Reason: `mux` produces the primary
+  `<slug>_<duration>min.mp4` from the canonical video+audio tracks. `render`
+  produces named variants (`<slug>_<variant>.mp4`) at arbitrary durations
+  with arbitrary mix overrides — no API calls, just ffmpeg.

@@ -2,6 +2,7 @@ from datetime import datetime
 
 from rich.console import Console
 
+from .. import costs
 from ..project import Project
 from ..providers import fal
 from ..schemas import ImageItem, ImageManifest, StageStatus
@@ -38,6 +39,10 @@ def regen(project: Project, image_id: str, *, prompt: str | None = None) -> None
         console.print(f"  new prompt: {new_prompt[:120]}{'…' if len(new_prompt) > 120 else ''}")
     png, meta = fal.generate_image(new_prompt, model=state.config.image_model)
     target_path.write_bytes(png)
+    costs.record(
+        project, provider="fal", model=state.config.image_model,
+        stage="images", artifact_id=image_id, units=1.0,
+    )
 
     target.prompt = new_prompt
     target.seed = meta.get("seed")
@@ -72,17 +77,24 @@ def run(project: Project, *, count: int = 6, force: bool = False) -> None:
     project.save_state(state)
 
     try:
+        prompt_pool = plan.image_prompts
         for i in range(start_idx, count):
             img_id = f"img_{i + 1:02d}"
             filename = f"{img_id}.png"
+            # cycle through varied prompts so each candidate looks meaningfully different
+            prompt = prompt_pool[i % len(prompt_pool)]
             console.print(f"  {img_id}…", end=" ")
-            png, meta = fal.generate_image(plan.image_prompt, model=state.config.image_model)
+            png, meta = fal.generate_image(prompt, model=state.config.image_model)
             (project.images_dir / filename).write_bytes(png)
+            costs.record(
+                project, provider="fal", model=state.config.image_model,
+                stage="images", artifact_id=img_id, units=1.0,
+            )
             items.append(
                 ImageItem(
                     id=img_id,
                     filename=filename,
-                    prompt=plan.image_prompt,
+                    prompt=prompt,
                     seed=meta.get("seed"),
                 )
             )
