@@ -7,6 +7,7 @@ import { api, projectFileUrl } from "@/lib/api";
 import type { ClipItem } from "@/lib/types";
 import { WizardLayout } from "@/components/wizard-layout";
 import { PromptListEditor } from "@/components/prompt-list-editor";
+import { PickedImageAnchor } from "@/components/picked-image-anchor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -174,6 +175,8 @@ export default function ClipsStep({
       }
       onContinue={continueToSfx}
     >
+      <PickedImageAnchor slug={slug} />
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center justify-between">

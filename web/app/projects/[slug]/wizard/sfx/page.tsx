@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { api, projectFileUrl } from "@/lib/api";
 import type { SFXLayer, SfxLayerState } from "@/lib/types";
 import { WizardLayout } from "@/components/wizard-layout";
+import { PickedImageAnchor } from "@/components/picked-image-anchor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -121,6 +122,8 @@ export default function SfxStep({
           : "Continue"
       }
     >
+      <PickedImageAnchor slug={slug} />
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center justify-between">

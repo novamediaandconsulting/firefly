@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, projectFileUrl } from "@/lib/api";
 import { WizardLayout } from "@/components/wizard-layout";
+import { PickedImageAnchor } from "@/components/picked-image-anchor";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
@@ -113,6 +114,8 @@ export default function MixStep({
       continueLabel={lock.isPending ? "Locking…" : "Lock mix & continue"}
       continueDisabled={lock.isPending}
     >
+      <PickedImageAnchor slug={slug} />
+
       <Card>
         <CardContent className="py-6 space-y-6">
           {useMusic && (
