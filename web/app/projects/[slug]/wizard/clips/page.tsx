@@ -1,16 +1,17 @@
 "use client";
 
-import { use, useState } from "react";
+import { use, useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, projectFileUrl } from "@/lib/api";
 import type { ClipItem } from "@/lib/types";
 import { WizardLayout } from "@/components/wizard-layout";
+import { PromptListEditor } from "@/components/prompt-list-editor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -30,6 +31,8 @@ export default function ClipsStep({
   const [perImage, setPerImage] = useState(1);
   const [regenTarget, setRegenTarget] = useState<ClipItem | null>(null);
   const [regenPrompt, setRegenPrompt] = useState("");
+  const [clipPrompts, setClipPrompts] = useState<string[]>([]);
+  const [dirty, setDirty] = useState(false);
 
   const imagesQ = useQuery({
     queryKey: ["images", slug],
@@ -41,13 +44,42 @@ export default function ClipsStep({
     queryFn: () => api.getClips(slug),
     retry: false,
   });
+  const planQ = useQuery({
+    queryKey: ["plan", slug],
+    queryFn: () => api.getPlan(slug),
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (planQ.data) {
+      setClipPrompts(planQ.data.clip_prompts);
+      setDirty(false);
+    }
+  }, [planQ.data]);
 
   const approvedImages = (imagesQ.data?.items ?? []).filter((i) => i.approved);
   const items = clipsQ.data?.items ?? [];
   const approvedIds = new Set(items.filter((c) => c.approved).map((c) => c.id));
 
+  const savePlan = useMutation({
+    mutationFn: async () => {
+      if (!planQ.data) throw new Error("no plan");
+      return api.updatePlan(slug, {
+        ...planQ.data,
+        clip_prompts: clipPrompts.map((p) => p.trim()).filter(Boolean),
+      });
+    },
+    onSuccess: () => {
+      setDirty(false);
+      queryClient.invalidateQueries({ queryKey: ["plan", slug] });
+    },
+  });
+
   const generate = useMutation({
-    mutationFn: (count: number) => api.generateClips(slug, count, false),
+    mutationFn: async (count: number) => {
+      if (dirty) await savePlan.mutateAsync();
+      return api.generateClips(slug, count, false);
+    },
     onSuccess: () => {
       toast.success("Clip(s) generated");
       queryClient.invalidateQueries({ queryKey: ["clips", slug] });
@@ -131,7 +163,7 @@ export default function ClipsStep({
       slug={slug}
       step="clips"
       title="Clips"
-      description="Each clip is a 10s motion variation of your scene. Pick the one with the cleanest, most natural motion."
+      description="Each clip is a 10s motion variation of your scene. Edit the motion prompts below to steer what moves; pick the one with the cleanest motion."
       continueDisabled={approvedIds.size === 0 || loop.isPending}
       continueLabel={
         approvedIds.size === 0
@@ -143,6 +175,35 @@ export default function ClipsStep({
       onContinue={continueToSfx}
     >
       <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center justify-between">
+            <span>Clip motion prompts</span>
+            {dirty && (
+              <span className="text-xs text-amber-600 font-normal">
+                unsaved — saves on generate
+              </span>
+            )}
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Describe the motion (fire flicker, snow drift, candle flame).
+            Each generated clip cycles through this list. Avoid mentioning
+            things that aren&apos;t already in the source image.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <PromptListEditor
+            prompts={clipPrompts}
+            onChange={(next) => {
+              setClipPrompts(next);
+              setDirty(true);
+            }}
+            addLabel="+ Add motion variation"
+            rows={2}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
         <CardContent className="py-4 flex items-center gap-4">
           <div className="flex-1">
             <Label htmlFor="count" className="text-xs">
@@ -151,8 +212,8 @@ export default function ClipsStep({
                 : "Generate another batch"}
             </Label>
             <p className="text-xs text-muted-foreground mt-1">
-              ~$1.12 per 10-sec clip (Kling v3 pro, audio off). Default is 1
-              — generate more if the first doesn&apos;t land.
+              ~$1.12 per 10-sec clip (Kling v3 pro, audio off). Default 1 —
+              generate more if the first doesn&apos;t land.
               {approvedImages.length > 1 &&
                 ` × ${approvedImages.length} approved images = ${perImage * approvedImages.length} total`}
             </p>

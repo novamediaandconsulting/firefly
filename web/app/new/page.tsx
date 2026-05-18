@@ -27,7 +27,7 @@ export default function NewProjectPage() {
       }),
     onSuccess: (s) => {
       toast.success(`Created ${s.slug}`);
-      router.push(`/projects/${s.slug}/wizard/plan`);
+      router.push(`/projects/${s.slug}/wizard/title`);
     },
     onError: (e: Error) => toast.error(e.message),
   });

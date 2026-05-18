@@ -1,15 +1,16 @@
 "use client";
 
-import { use, useState } from "react";
+import { use, useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, projectFileUrl } from "@/lib/api";
-import type { SfxLayerState } from "@/lib/types";
+import type { SFXLayer, SfxLayerState } from "@/lib/types";
 import { WizardLayout } from "@/components/wizard-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
 export default function SfxStep({
@@ -20,15 +21,47 @@ export default function SfxStep({
   const { slug } = use(params);
   const queryClient = useQueryClient();
   const [variations, setVariations] = useState(3);
+  const [editLayers, setEditLayers] = useState<SFXLayer[]>([]);
+  const [dirty, setDirty] = useState(false);
 
+  const planQ = useQuery({
+    queryKey: ["plan", slug],
+    queryFn: () => api.getPlan(slug),
+    retry: false,
+  });
   const sfxQ = useQuery({
     queryKey: ["sfx", slug],
     queryFn: () => api.getSfx(slug),
     retry: false,
   });
 
+  useEffect(() => {
+    if (planQ.data) {
+      setEditLayers(planQ.data.sfx_layers);
+      setDirty(false);
+    }
+  }, [planQ.data]);
+
+  const savePlan = useMutation({
+    mutationFn: async () => {
+      if (!planQ.data) throw new Error("no plan");
+      return api.updatePlan(slug, {
+        ...planQ.data,
+        sfx_layers: editLayers,
+      });
+    },
+    onSuccess: () => {
+      setDirty(false);
+      queryClient.invalidateQueries({ queryKey: ["plan", slug] });
+      queryClient.invalidateQueries({ queryKey: ["sfx", slug] });
+    },
+  });
+
   const generate = useMutation({
-    mutationFn: () => api.generateSfx(slug, variations),
+    mutationFn: async () => {
+      if (dirty) await savePlan.mutateAsync();
+      return api.generateSfx(slug, variations);
+    },
     onSuccess: () => {
       toast.success("SFX variations ready");
       queryClient.invalidateQueries({ queryKey: ["sfx", slug] });
@@ -47,18 +80,38 @@ export default function SfxStep({
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const layers = sfxQ.data?.layers ?? [];
-  const hasGenerated = layers.some((l) => l.variations.length > 0);
+  const layerStates = sfxQ.data?.layers ?? [];
+  const hasGenerated = layerStates.some((l) => l.variations.length > 0);
   const allPicked =
-    layers.length > 0 &&
-    layers.every((l) => l.variations.length === 0 || l.current_variation);
+    layerStates.length > 0 &&
+    layerStates.every(
+      (l) => l.variations.length === 0 || l.current_variation,
+    );
+
+  function updateLayer(i: number, patch: Partial<SFXLayer>) {
+    const next = [...editLayers];
+    next[i] = { ...next[i], ...patch };
+    setEditLayers(next);
+    setDirty(true);
+  }
+  function addLayer() {
+    setEditLayers([
+      ...editLayers,
+      { name: "New layer", prompt: "", gain_db: -14 },
+    ]);
+    setDirty(true);
+  }
+  function removeLayer(i: number) {
+    setEditLayers(editLayers.filter((_, idx) => idx !== i));
+    setDirty(true);
+  }
 
   return (
     <WizardLayout
       slug={slug}
       step="sfx"
       title="SFX layers"
-      description="Each SFX layer is generated 3 times so you can pick the best take. Layers mix together for the final audio."
+      description="Define each ambient sound layer, then generate variations. Layers mix together; each gets its own gain."
       continueDisabled={!hasGenerated || !allPicked}
       continueLabel={
         !hasGenerated
@@ -69,16 +122,89 @@ export default function SfxStep({
       }
     >
       <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center justify-between">
+            <span>SFX layers ({editLayers.length})</span>
+            {dirty && (
+              <span className="text-xs text-amber-600 font-normal">
+                unsaved — saves on generate
+              </span>
+            )}
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Each layer is generated separately as 3 takes. Gain is in dB —
+            foreground sounds 0 to -6, background -14 to -18.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {editLayers.map((sfx, i) => {
+            const state = layerStates.find((l) => l.name === sfx.name);
+            return (
+              <div key={i} className="rounded-md border p-3 space-y-3">
+                <div className="grid grid-cols-12 gap-2 items-start">
+                  <Input
+                    className="col-span-3"
+                    value={sfx.name}
+                    onChange={(e) => updateLayer(i, { name: e.target.value })}
+                    placeholder="Layer name"
+                  />
+                  <Textarea
+                    rows={2}
+                    className="col-span-7"
+                    value={sfx.prompt}
+                    onChange={(e) =>
+                      updateLayer(i, { prompt: e.target.value })
+                    }
+                    placeholder="ElevenLabs prompt"
+                  />
+                  <Input
+                    type="number"
+                    className="col-span-1"
+                    value={sfx.gain_db}
+                    onChange={(e) =>
+                      updateLayer(i, { gain_db: parseFloat(e.target.value) })
+                    }
+                    step={1}
+                    title="gain dB"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="col-span-1"
+                    onClick={() => removeLayer(i)}
+                    disabled={editLayers.length <= 1}
+                  >
+                    ×
+                  </Button>
+                </div>
+                {state && state.variations.length > 0 && (
+                  <SfxVariations
+                    slug={slug}
+                    state={state}
+                    onPick={(v) =>
+                      pick.mutate({ layer: sfx.name, variation: v })
+                    }
+                  />
+                )}
+              </div>
+            );
+          })}
+          <Button size="sm" variant="outline" onClick={addLayer}>
+            + Add layer
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
         <CardContent className="py-4 flex items-center gap-4">
           <div className="flex-1">
             <Label htmlFor="variations" className="text-xs">
               Variations per layer
             </Label>
             <p className="text-xs text-muted-foreground mt-1">
-              ~$0.05 per variation. {layers.length} layer(s) ×{" "}
-              {variations} = {layers.length * variations} call(s) on first
-              generation. Variations are sticky — re-running this only
-              generates missing ones.
+              ~$0.05 per variation. Sticky — re-running only generates missing
+              ones, so editing a layer&apos;s prompt and clicking generate
+              creates new files only for that layer (after first deleting old).
             </p>
           </div>
           <Input
@@ -100,88 +226,51 @@ export default function SfxStep({
           </Button>
         </CardContent>
       </Card>
-
-      {layers.length === 0 && (
-        <p className="text-sm text-muted-foreground py-8 text-center">
-          No SFX layers in the plan. Go back to Plan to add some.
-        </p>
-      )}
-
-      {layers.map((layer) => (
-        <SfxLayerCard
-          key={layer.name}
-          slug={slug}
-          layer={layer}
-          onPick={(variation) =>
-            pick.mutate({ layer: layer.name, variation })
-          }
-        />
-      ))}
     </WizardLayout>
   );
 }
 
-function SfxLayerCard({
+function SfxVariations({
   slug,
-  layer,
+  state,
   onPick,
 }: {
   slug: string;
-  layer: SfxLayerState;
+  state: SfxLayerState;
   onPick: (variation: string) => void;
 }) {
   return (
-    <Card>
-      <CardContent className="py-4 space-y-3">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="font-medium">{layer.name}</div>
-            <p className="text-xs text-muted-foreground mt-1 max-w-2xl">
-              {layer.prompt}
-            </p>
+    <div className="grid gap-2 sm:grid-cols-3">
+      {state.variations.map((v) => {
+        const isPicked = state.current_variation === v.id;
+        return (
+          <div
+            key={v.id}
+            className={`rounded-md border p-2 space-y-2 ${
+              isPicked ? "ring-2 ring-emerald-500 border-emerald-500" : ""
+            }`}
+          >
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-mono">{v.id}</span>
+              {isPicked && <Badge>picked</Badge>}
+            </div>
+            <audio
+              src={projectFileUrl(slug, v.path)}
+              controls
+              preload="none"
+              className="w-full h-8"
+            />
+            <Button
+              size="sm"
+              variant={isPicked ? "secondary" : "outline"}
+              onClick={() => onPick(v.id)}
+              className="w-full"
+            >
+              {isPicked ? "Picked" : "Pick this"}
+            </Button>
           </div>
-          <Badge variant="secondary">{layer.gain_db}dB</Badge>
-        </div>
-
-        {layer.variations.length === 0 ? (
-          <p className="text-xs text-muted-foreground italic">
-            No variations yet — generate above.
-          </p>
-        ) : (
-          <div className="grid gap-2 sm:grid-cols-3">
-            {layer.variations.map((v) => {
-              const isPicked = layer.current_variation === v.id;
-              return (
-                <div
-                  key={v.id}
-                  className={`rounded-md border p-2 space-y-2 ${
-                    isPicked ? "ring-2 ring-emerald-500 border-emerald-500" : ""
-                  }`}
-                >
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-mono">{v.id}</span>
-                    {isPicked && <Badge>picked</Badge>}
-                  </div>
-                  <audio
-                    src={projectFileUrl(slug, v.path)}
-                    controls
-                    preload="none"
-                    className="w-full h-8"
-                  />
-                  <Button
-                    size="sm"
-                    variant={isPicked ? "secondary" : "outline"}
-                    onClick={() => onPick(v.id)}
-                    className="w-full"
-                  >
-                    {isPicked ? "Picked" : "Pick this"}
-                  </Button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+        );
+      })}
+    </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState } from "react";
+import { use, useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, projectFileUrl } from "@/lib/api";
@@ -8,7 +8,8 @@ import { WizardLayout } from "@/components/wizard-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
 export default function MusicStep({
@@ -19,7 +20,14 @@ export default function MusicStep({
   const { slug } = use(params);
   const queryClient = useQueryClient();
   const [variations, setVariations] = useState(3);
+  const [musicMood, setMusicMood] = useState("");
+  const [dirty, setDirty] = useState(false);
 
+  const planQ = useQuery({
+    queryKey: ["plan", slug],
+    queryFn: () => api.getPlan(slug),
+    retry: false,
+  });
   const musicQ = useQuery({
     queryKey: ["music", slug],
     queryFn: () => api.getMusic(slug),
@@ -31,8 +39,32 @@ export default function MusicStep({
     retry: false,
   });
 
+  useEffect(() => {
+    if (planQ.data) {
+      setMusicMood(planQ.data.music_mood);
+      setDirty(false);
+    }
+  }, [planQ.data]);
+
+  const savePlan = useMutation({
+    mutationFn: async () => {
+      if (!planQ.data) throw new Error("no plan");
+      return api.updatePlan(slug, {
+        ...planQ.data,
+        music_mood: musicMood,
+      });
+    },
+    onSuccess: () => {
+      setDirty(false);
+      queryClient.invalidateQueries({ queryKey: ["plan", slug] });
+    },
+  });
+
   const generate = useMutation({
-    mutationFn: () => api.generateMusic(slug, variations),
+    mutationFn: async () => {
+      if (dirty) await savePlan.mutateAsync();
+      return api.generateMusic(slug, variations);
+    },
     onSuccess: () => {
       toast.success("Music variations ready");
       queryClient.invalidateQueries({ queryKey: ["music", slug] });
@@ -83,17 +115,34 @@ export default function MusicStep({
       }
     >
       <Card>
-        <CardContent className="py-4 flex items-center gap-4">
-          <div className="flex-1">
-            <Label className="text-xs">Include music in this video?</Label>
-            <p className="text-xs text-muted-foreground mt-1">
-              Mood from plan:{" "}
-              <span className="text-foreground italic">
-                {music?.music_mood || "—"}
+        <CardHeader>
+          <CardTitle className="text-base flex items-center justify-between">
+            <span>Music mood</span>
+            {dirty && (
+              <span className="text-xs text-amber-600 font-normal">
+                unsaved — saves on generate
               </span>
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
+            )}
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            A short prompt for the music generator (CassetteAI). Keep it
+            instrumental-focused, no vocals or drums unless you want them.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Textarea
+            rows={3}
+            value={musicMood}
+            onChange={(e) => {
+              setMusicMood(e.target.value);
+              setDirty(true);
+            }}
+            placeholder="e.g. Soft ambient piano with warm reverb, calm morning mood, no drums"
+          />
+          <div className="flex items-center gap-3 pt-2 border-t">
+            <Label className="flex-1 text-xs">
+              Include music in this video?
+            </Label>
             <Button
               variant={useMusic ? "default" : "outline"}
               size="sm"
@@ -171,7 +220,7 @@ export default function MusicStep({
                           src={projectFileUrl(slug, v.path)}
                           controls
                           preload="none"
-                          className="w-full h-8"
+                          className="w-full h-10"
                         />
                         <Button
                           size="sm"

@@ -4,7 +4,7 @@
 import type { State } from "./types";
 
 export type WizardStepId =
-  | "plan"
+  | "title"
   | "images"
   | "clips"
   | "sfx"
@@ -12,14 +12,8 @@ export type WizardStepId =
   | "mix"
   | "final";
 
-export interface WizardStep {
-  id: WizardStepId;
-  label: string;
-  // Returns "done" | "current" | "pending" given project state + the active step.
-}
-
 export const WIZARD_STEPS: { id: WizardStepId; label: string }[] = [
-  { id: "plan",   label: "Plan" },
+  { id: "title",  label: "Title" },
   { id: "images", label: "Images" },
   { id: "clips",  label: "Clips" },
   { id: "sfx",    label: "SFX" },
@@ -31,11 +25,9 @@ export const WIZARD_STEPS: { id: WizardStepId; label: string }[] = [
 /** Returns which wizard step the user should resume at, based on stage statuses. */
 export function suggestStep(state: State): WizardStepId {
   const s = state.stages;
-  if (s.plan?.status !== "done") return "plan";
+  if (s.plan?.status !== "done") return "title";
   if (s.images?.status !== "done") return "images";
   if (s.clips?.status !== "done") return "clips";
-  // SFX/music/mix all live under the audio stage; until we have richer
-  // per-substage tracking, gate on audio + the existence of a locked mix.
   if (s.audio?.status !== "done") return "sfx";
   if (s.mux?.status !== "done") return "final";
   return "final";
