@@ -85,9 +85,9 @@ export default function ImagesStep({
       return api.generateImages(slug, count, false);
     },
     onSuccess: () => {
-      toast.success("Images generated");
+      toast.success("Image generation started");
+      queryClient.invalidateQueries({ queryKey: ["project", slug] }); // kicks off polling
       queryClient.invalidateQueries({ queryKey: ["images", slug] });
-      queryClient.invalidateQueries({ queryKey: ["project", slug] });
       queryClient.invalidateQueries({ queryKey: ["cost", slug] });
     },
     onError: (e: Error) => toast.error(e.message),

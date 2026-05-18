@@ -54,7 +54,8 @@ export default function FinalStep({
         force: false,
       }),
     onSuccess: () => {
-      toast.success(`Rendered ${variantName}`);
+      toast.success(`Render started: ${variantName}`);
+      queryClient.invalidateQueries({ queryKey: ["project", slug] }); // kicks off polling
       queryClient.invalidateQueries({ queryKey: ["variants", slug] });
     },
     onError: (e: Error) => toast.error(e.message),

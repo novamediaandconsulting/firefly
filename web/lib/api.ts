@@ -64,6 +64,8 @@ export const api = {
     }),
   deleteProject: (slug: string) =>
     request<void>(`/api/projects/${slug}?confirm=true`, { method: "DELETE" }),
+  clearJob: (slug: string) =>
+    request<State>(`/api/projects/${slug}/job`, { method: "DELETE" }),
 
   // ---- plan ----
   getPlan: (slug: string) => request<Plan>(`/api/projects/${slug}/plan`),

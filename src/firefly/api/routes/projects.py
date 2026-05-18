@@ -88,3 +88,18 @@ def delete_project(slug: str, confirm: bool = False) -> None:
         raise HTTPException(400, "pass ?confirm=true to actually delete the project")
     proj = load_project(slug)
     shutil.rmtree(proj.root)
+
+
+@router.delete("/{slug}/job", status_code=200)
+def clear_current_job(slug: str) -> State:
+    """Force-clear current_job so a new job can start.
+
+    Does NOT stop the worker thread (the executor keeps running the lambda
+    until it returns). Use only when you know the worker is dead — e.g.
+    after the page hung and you want to retry.
+    """
+    proj = load_project(slug)
+    state = proj.load_state()
+    state.current_job = None
+    proj.save_state(state)
+    return state

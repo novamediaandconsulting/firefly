@@ -75,7 +75,8 @@ export default function SfxStep({
       return api.generateSfx(slug, variations);
     },
     onSuccess: () => {
-      toast.success("SFX variations ready");
+      toast.success("SFX generation started");
+      queryClient.invalidateQueries({ queryKey: ["project", slug] }); // kicks off polling
       queryClient.invalidateQueries({ queryKey: ["sfx", slug] });
       queryClient.invalidateQueries({ queryKey: ["cost", slug] });
     },

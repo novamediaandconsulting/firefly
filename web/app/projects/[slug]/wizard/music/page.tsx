@@ -78,7 +78,8 @@ export default function MusicStep({
       return api.generateMusic(slug, variations);
     },
     onSuccess: () => {
-      toast.success("Music variations ready");
+      toast.success("Music generation started");
+      queryClient.invalidateQueries({ queryKey: ["project", slug] }); // kicks off polling
       queryClient.invalidateQueries({ queryKey: ["music", slug] });
       queryClient.invalidateQueries({ queryKey: ["cost", slug] });
     },

@@ -93,9 +93,9 @@ export default function ClipsStep({
       return api.generateClips(slug, count, false);
     },
     onSuccess: () => {
-      toast.success("Clip(s) generated");
+      toast.success("Clip generation started");
+      queryClient.invalidateQueries({ queryKey: ["project", slug] }); // kicks off polling
       queryClient.invalidateQueries({ queryKey: ["clips", slug] });
-      queryClient.invalidateQueries({ queryKey: ["project", slug] });
       queryClient.invalidateQueries({ queryKey: ["cost", slug] });
     },
     onError: (e: Error) => toast.error(e.message),

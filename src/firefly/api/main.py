@@ -9,12 +9,19 @@ served directly from `projects/<slug>/`.
 
 from __future__ import annotations
 
+import logging
+from datetime import datetime
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..config import PROJECTS_ROOT
+from ..project import Project
+from ..schemas import JobStatus
+
+logger = logging.getLogger("firefly.api")
 from .routes import (
     audio as audio_routes,
     clips as clips_routes,
@@ -55,6 +62,36 @@ def create_app() -> FastAPI:
     @app.exception_handler(RuntimeError)
     async def runtime_error_handler(_: Request, exc: RuntimeError):
         return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+    @app.on_event("startup")
+    def _clear_stale_jobs() -> None:
+        """Mark any current_job left over from a prior server run as interrupted.
+
+        Without this, a worker thread that died mid-run (e.g. server kill, OS
+        crash) would leave current_job set forever, blocking new jobs with 409.
+        """
+        if not PROJECTS_ROOT.is_dir():
+            return
+        cleared = 0
+        for child in PROJECTS_ROOT.iterdir():
+            if not (child / "state.json").exists():
+                continue
+            try:
+                proj = Project(child.name)
+                state = proj.load_state()
+                if state.current_job and not state.current_job.error:
+                    state.current_job = JobStatus(
+                        stage=state.current_job.stage,
+                        message="interrupted by server restart",
+                        started_at=state.current_job.started_at,
+                        error="interrupted by server restart",
+                    )
+                    proj.save_state(state)
+                    cleared += 1
+            except Exception:
+                logger.exception("failed to clear stale job for %s", child.name)
+        if cleared:
+            logger.info("marked %d stale job(s) as interrupted", cleared)
 
     @app.get("/api/health")
     def health():

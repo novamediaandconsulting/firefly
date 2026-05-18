@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { projectRefetchInterval } from "@/lib/job-polling";
@@ -34,6 +35,7 @@ export function WizardLayout({
   hideFooter = false,
 }: WizardLayoutProps) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const next = nextStep(step);
   const prev = prevStep(step);
   const costQ = useQuery({
@@ -52,6 +54,14 @@ export function WizardLayout({
     refetchInterval: projectRefetchInterval(),
   });
   const job = stateQ.data?.current_job ?? null;
+  const clearJob = useMutation({
+    mutationFn: () => api.clearJob(slug),
+    onSuccess: () => {
+      toast.success("Job cleared");
+      queryClient.invalidateQueries({ queryKey: ["project", slug] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
 
   async function handleContinue() {
     if (onContinue) await onContinue();
@@ -72,7 +82,7 @@ export function WizardLayout({
         <div className="flex items-center gap-3">
           {job && (
             <div
-              className={`text-xs px-2.5 py-1 rounded-md ${
+              className={`flex items-center gap-2 text-xs px-2.5 py-1 rounded-md ${
                 job.error
                   ? "bg-red-500/10 text-red-600"
                   : "bg-amber-500/10 text-amber-700 dark:text-amber-400"
@@ -80,14 +90,33 @@ export function WizardLayout({
             >
               {job.error ? (
                 <>
-                  <span className="font-semibold">{job.stage} failed:</span>{" "}
-                  {job.error}
+                  <span>
+                    <span className="font-semibold">{job.stage} failed:</span>{" "}
+                    {job.error}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => clearJob.mutate()}
+                    className="underline hover:no-underline"
+                  >
+                    dismiss
+                  </button>
                 </>
               ) : (
                 <>
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse mr-1.5" />
-                  <span className="font-semibold">{job.stage}:</span>{" "}
-                  {job.message}
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                  <span>
+                    <span className="font-semibold">{job.stage}:</span>{" "}
+                    {job.message}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => clearJob.mutate()}
+                    className="text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                    title="Force-clear the job state. Doesn't kill the worker; use only if the job hung."
+                  >
+                    cancel
+                  </button>
                 </>
               )}
             </div>
