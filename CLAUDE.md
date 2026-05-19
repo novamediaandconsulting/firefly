@@ -1,449 +1,255 @@
-# Project: firefly
+# Project: Firefly Studio
 
-Long-form cozy/ambient YouTube video generator. A user types one concept
-("cozy library with crackling fireplace, snow outside") and gets back a 1–8 hour
-1080p MP4 with original visuals, music, and sound design.
+Local web app that helps a single user produce long-form cozy / ambient
+YouTube videos one project at a time. The user steps through:
 
-This file orients future Claude sessions. Read in full before editing anything
-non-trivial — most surprises in this codebase come from external APIs, not from
-the code itself.
+1. **Title** — names the project; backend derives a unique slug.
+2. **Image** — describes a scene, picks a resolution, generates one
+   image at a time. Retries until happy. History of every attempt is
+   preserved and re-selectable.
+3. **Clip** — confirmed image becomes the anchor; user lists motion
+   prompts and picks a duration (1–30s, chained 15+15 for >15s). One
+   clip generated per Generate. Retry freely.
+4. **SFX** — adds N ambient sound layers one at a time. Each layer
+   has its own per-attempt history, title, prompt, gain.
+5. **Music** — single instrumental track, generate-then-retry-or-skip.
+6. **Mix** — per-layer checkbox + dB slider. Real-time Web Audio
+   playback while sliding, plus an "exact preview" button that runs
+   the same ffmpeg path the final render uses.
+7. **Final** — pick a duration in minutes; click Render. Multiple
+   variants can be rendered without redoing earlier steps. Complete
+   marks the project done.
+
+This file orients future Claude sessions. Most surprises in this codebase
+come from external APIs, not from the code itself.
 
 ## Architecture
 
-A stage-oriented Python CLI. Each stage:
-
-1. reads the project state from `projects/<slug>/state.json`,
-2. checks an idempotency gate (skip if `done` unless `--force`),
-3. produces an inspectable artifact under `projects/<slug>/`,
-4. atomically writes back the updated state.
-
-Stages, in pipeline order:
+Two processes, one shared filesystem under `projects/`:
 
 ```
-concept → plan → images → clips → loop → audio → mux → metadata
-                   │         │              │
-                  QA gate   QA gate      preview
+┌─────────────────────────────┐       HTTP        ┌─────────────────────────┐
+│  Next.js 16 App Router      │  ───────────────► │  FastAPI (api/)         │
+│  TypeScript + Tailwind 4    │   localhost:8000   │  wraps src/firefly/    │
+│  shadcn/ui + Web Audio API  │                    │  studio*.py            │
+│  localhost:3000             │   /files static    │  + costs + jobs        │
+└─────────────────────────────┘                    └────────────┬────────────┘
+                                                                │
+                                                                ▼
+                                                ┌──────────────────────────────┐
+                                                │  projects/<slug>/            │
+                                                │  project.json (truth)        │
+                                                │  costs.jsonl (append)        │
+                                                │  final_*.{png,mp4,wav,mp3}   │
+                                                │  attempts/<step>/v<N>.<ext>  │
+                                                └──────────────────────────────┘
 ```
 
-`QA gate` means the stage finishes in `awaiting_qa` status and the user must
-explicitly approve specific artifact IDs (`firefly approve images <slug> <id>...`)
-before downstream stages can run.
+`./dev.sh` runs both servers concurrently with Ctrl-C killing both.
 
-## Repo layout
+## Data model (`src/firefly/studio.py`)
 
-```
-src/firefly/
-├── cli.py               typer entry; main() wraps with friendly error handling
-├── config.py            env loading, require_env helper, root paths
-├── schemas.py           pydantic models: Plan, State, manifests, StageStatus
-├── project.py           Project class — all paths, atomic state I/O
-├── ffmpeg.py            ffmpeg/ffprobe wrappers (the only place subprocess lives)
-├── providers/
-│   ├── claude.py        plan + metadata generation
-│   ├── fal.py           Flux images + Kling clips
-│   ├── music.py         CassetteAI / Beatoven music beds (via fal)
-│   └── elevenlabs.py    Sound Effects layers
-└── stages/
-    ├── plan.py          concept → plan.json (Claude tool-call structured output)
-    ├── images.py        N candidates → images/manifest.json (awaiting_qa)
-    ├── clips.py         image-to-video per approved still
-    ├── loop.py          build_session → make_loopable → loop_concat
-    ├── audio.py         music bed + SFX layers → mixed full-duration audio
-    └── mux.py           video + audio → final/<slug>_<min>min.mp4
+`StudioProject` is the source of truth, stored as `project.json`:
+
+```python
+class StudioProject(BaseModel):
+    slug: str                        # immutable after creation
+    title: str
+    created_at: datetime
+    last_modified_at: datetime
+    config: StudioConfig             # model IDs
+    image: ImageStep                 # prompt, resolution, attempts[], chosen_attempt_id, confirmed
+    clip: ClipStep                   # motion_prompts[], duration_s, attempts[], ...
+    sfx: SfxStep                     # layers: list[SfxLayer]
+    music: MusicStep                 # prompt, skipped, attempts[], chosen_attempt_id
+    mix: MixStep                     # layer_gains{}, disabled_layers[], previews[]
+    final: FinalStep                 # duration_min, renders[], chosen_render_id, completed_at
+    current_job: JobStatus | None    # active background job, drives UI polling
+    legacy: bool                     # true if migrated from v1 schema
 ```
 
-Two roots that aren't gitignored as a class — they have a tracked `.gitkeep`
-but their contents are ignored:
+Every step keeps `attempts: list[Attempt]` — nothing is ever overwritten.
+Selecting an attempt copies the file to a top-level `final_<step>.<ext>` for
+filesystem-obvious "this is what was used."
 
-- `projects/<slug>/` — generated artifacts. Hundreds of MB per project. Never check in.
-- `assets/music/` — optional user-supplied stock music. Used only with `--stock`.
+Slug helpers:
+- `derive_slug(title)` — lowercase, hyphenate, strip non-alphanumerics.
+- `ensure_unique_slug(title)` — auto-suffixes `-2`, `-3`, … on collision.
+- `slug-preview` API endpoint shows the user the final slug live.
 
-## State model
+## Filesystem layout
 
-`State` (in `schemas.py`) holds:
-
-- `slug`, `concept`, `created_at`
-- `config: ProjectConfig` — target duration, resolution, model IDs (these are
-  baked into the project at `init` so changing the global defaults later does
-  not retroactively affect existing projects).
-- `stages: dict[str, StageState]` — per-stage status (`pending` → `in_progress`
-  → `awaiting_qa` / `done` / `failed`), completion timestamp, primary artifact
-  path, last error message.
-
-State is read/written via `_atomic_write_text` in `project.py` — writes go to
-`.tmp-*` then `os.replace`. Kill the process mid-stage and the next invocation
-sees clean state.
-
-## Provider notes (read these before editing the providers!)
-
-### fal.ai — image, video, music
-
-- One key (`FAL_KEY`) covers everything. Model paths drift; **expect** the
-  exact string to be wrong every few months.
-- Kling video was at `fal-ai/kling-video/v2/standard/image-to-video` early in
-  the project; the current path is `fal-ai/kling-video/v3/pro/image-to-video`.
-  When you hit `Path not found`, search fal's model directory for the latest.
-- Kling v3 input is `start_image_url`, **not** `image_url`. The older param
-  name silently returns nothing helpful.
-- Always pass `generate_audio: false` to Kling. Saves $0.05/sec of clip and
-  we layer our own audio anyway.
-- Music is via CassetteAI (`cassetteai/music-generator`) or Beatoven
-  (`beatoven/music-generation`). Both take `prompt` + `duration` and return
-  `audio_file.url`. Up to ~180s per generation; we loop to target with ffmpeg.
-
-### Claude — plan + metadata
-
-- Uses tool-calling for structured output: the model is forced to call a tool
-  whose `input_schema` is the pydantic JSON schema of the target type (`Plan`,
-  etc.). Cleanest way to get guaranteed-valid JSON.
-- Default model is **Sonnet 4.6** (cheap, plenty for this). Opus 4.7 is
-  available via `--plan-model claude-opus-4-7` at project init.
-- The system prompt in `providers/claude.py` constrains the plan style: no
-  people, static camera, motion-only variation, 10–16 clip prompts, 2–4
-  SFX layers. Edit the prompt to change creative direction.
-
-### ElevenLabs — SFX layers
-
-- Endpoint: `/v1/sound-generation` (still works). Header: `xi-api-key`.
-- Max `duration_seconds` is **30**, not 22.
-- Critical flag: `loop: true` — produces seamlessly-loopable audio. Use it
-  for every SFX layer, since we loop them for hours.
-- Default model: `eleven_text_to_sound_v2`.
-- Restricted API keys only need the **Sound Effects** endpoint enabled. Music
-  Generation is on ElevenLabs too but we use fal instead.
-
-### Why not Suno
-
-There is no official public Suno API as of 2026 — all "Suno API" providers
-(sunoapi.org, EvoLink, Apiframe, PiAPI) are third-party wrappers around
-Suno's internal endpoints. They can break overnight and are ToS-grey. Music
-goes through fal's first-party music models instead.
-
-If you ever wire Suno: add a new `providers/suno.py`, configure via a
-`SUNO_API_KEY` env var, and toggle via the `music_model` field in
-`ProjectConfig` (e.g. `music_model: "suno/v5"`). Keep the fal path as the
-default.
-
-## ffmpeg pipeline (the trickiest part)
-
-The loop stage threads three operations:
-
-1. **`build_session(clips, dst, resolution, fps, xfade_s)`** — concatenates
-   N clips with crossfades. Every input is pre-normalized (`scale`, `crop`,
-   `fps`, `setpts`, `format=yuv420p`) so xfade has uniform inputs. With
-   N == 1, it's just a normalize-and-re-encode. Output is `session.mp4`,
-   duration = `sum(clip_durations) - (N-1) * xfade_s`.
-2. **`make_loopable(src, dst, xfade_s)`** — crossfades the tail of `src` over
-   its head. Result is the same duration as `src`, but when looped, the loop
-   boundary is hidden. This is what makes a 5-second clip (or an 80-second
-   multi-clip session) play smoothly for hours.
-3. **`loop_concat(loopable, dst, target_s)`** — uses `-stream_loop -1 -i ... -t
-   target -c:v copy`. No re-encode, instant even for 8-hour outputs.
-
-Why `-c:v copy` works: build_session + make_loopable already produced H.264
-yuv420p at the target resolution & fps. The loop step just rewrites packet
-timestamps; the bytes are unchanged.
-
-Audio mixing (`ffmpeg.mix_audio`) uses `amix` with per-layer `volume=<dB>dB`
-and `-stream_loop -1` on each input. All layers loop independently to the
-target duration, which is fine — they're ambient.
-
-## CLI
-
-```bash
-# Pipeline (run in order)
-uv run firefly init <slug> "<concept>"               # creates project, no API calls
-uv run firefly plan <slug> [--force]
-uv run firefly images <slug> [-n 4] [--force]        # awaiting_qa after success
-uv run firefly approve images <slug> img_01 img_03 ...
-uv run firefly clips <slug> [-n 3]                   # n clips per approved image, 10s each
-uv run firefly approve clips <slug> img_01_01 img_03_02 ...
-uv run firefly loop <slug> [--duration-min 480]
-uv run firefly audio <slug> [--silent|--stock|--no-music|--skip-sfx]
-                            [--sfx-variations 3] [--music-variations 3]
-uv run firefly mux <slug>
-uv run firefly status <slug>
-uv run firefly cost <slug>                           # breakdown of spend from costs.jsonl
-
-# QA iteration (re-roll individual artifacts; backs up the previous version)
-uv run firefly regen image <slug> <img_id> [--prompt "..."]
-uv run firefly regen clip  <slug> <clip_id> [--prompt "..."]
-uv run firefly regen sfx   <slug> "<layer name>" [--prompt "..."] [-n 3]
-
-# Pick the winning variation (cp + audio --force is automated under the hood)
-uv run firefly pick sfx   <slug> "<layer name>" v2
-uv run firefly pick music <slug> v2
-
-# Mix board (per-layer gain overrides used by `render`)
-uv run firefly mix preview <slug> -l "_music=-12" -l "Babbling Brook=0" [-d 60]
-uv run firefly mix lock    <slug> -l "_music=-12" -l "Babbling Brook=0"
-uv run firefly mix show    <slug>
-
-# Named final variants (no API calls — reuses source files)
-uv run firefly render   <slug> 30min       -d 30   [--audio-mode default]
-uv run firefly render   <slug> 8hr_silent  -d 480  --audio-mode silent
-uv run firefly variants <slug>             # list registered variants
+```
+projects/<slug>/
+├── project.json                  # single source of truth (the StudioProject)
+├── costs.jsonl                   # append-only cost log
+├── final_image.png               # copy of the chosen image attempt
+├── final_clip.mp4                # copy of the chosen clip attempt
+├── final_music.wav               # copy of the chosen music attempt (absent if skipped)
+├── final_sfx_<layer-id>.mp3      # one per active SFX layer
+├── final_video_<variant>.mp4     # rendered final variants (may be many)
+└── attempts/
+    ├── image/v1.png  v1.png.meta.json  v2.png  v2.png.meta.json  …
+    ├── clip/v1.mp4   v1.mp4.meta.json  …
+    ├── sfx/<layer-id>/v1.mp3  v1.mp3.meta.json  …
+    ├── music/v1.wav  v1.wav.meta.json  …
+    └── mix_preview/v1.mp3  v1.mp3.meta.json  …
 ```
 
-The `init` command takes optional `--duration-min`, `--resolution`,
-`--plan-model`. These are baked into `state.json` at creation time.
+Sibling `*.meta.json` files record the prompt, config, timestamp, and cost
+that produced each attempt — so navigating the filesystem in Finder tells
+the whole story.
 
-Audio flags:
-- `--silent` — no music, no SFX, just a silent track (debug / video-only test).
-- `--stock` — use any file in `assets/music/` instead of generating music.
-- `--no-music` — SFX only (e.g. a brook video where you only want nature sound).
-- `--skip-sfx` — music only.
+Legacy v1 projects (pre-Studio) keep their old files in place and reference
+those paths from `project.json` after migration. New attempts go to the new
+`attempts/` layout. Mixed layouts in legacy projects are expected.
 
-### Idempotency rules
+## Wizard step contract
 
-- A stage with status `done` is a no-op on re-run, except with `--force`.
-- `--force` re-runs the stage logic, which is generally a remix, not a
-  re-generation. Specifically: **the music bed is sticky** — once
-  `intermediate/music_bed.wav` is written it is reused. To regenerate the
-  music, delete that file. Same for SFX layers (`intermediate/sfx_*.mp3`).
-  This guard prevents accidental re-spend.
-- `images` and `clips` always append to their manifest. If you want a clean
-  slate, delete the directory before re-running.
-- `regen` commands always back up the previous artifact next to the original
-  as `<stem>.bak<unix-ts>.<ext>` (with a sibling `.prompt.txt` recording the
-  prompt that produced it). Restore by `mv`-ing the .bak back over the
-  original filename. **Never overwrite without backup** — see the recent
-  decisions section for why.
-- `regen sfx` writes variations as `intermediate/sfx_<slug>_v1.mp3`,
-  `_v2.mp3`, etc., leaving the canonical `sfx_<slug>.mp3` alone. After
-  picking a winner, `cp` the chosen variation over the canonical and run
-  `audio --force && mux --force` to remix.
+Each step in `web/app/projects/[slug]/studio/<step>/page.tsx` shares the
+same pattern:
 
-## Cost expectations (per 8-hour video)
+1. Fetch project state; subscribe to 2s polling when `current_job` is set.
+2. Local form state (prompt, duration, etc.) initialized from the project.
+3. On Generate: POST to `/api/projects/<slug>/<step>/generate` → 202 + job.
+4. While job runs, header shows the live job badge.
+5. Polling sees the new attempt land in `attempts[]`; the UI auto-jumps to it.
+6. User can click any prior attempt in the history strip to re-select it
+   (and the form repopulates with that attempt's config).
+7. Confirm calls `/select/{attempt_id}` then `/confirm/{step}` and routes
+   to the next step.
 
-| Stage | Default count | Per-unit | Subtotal |
-|---|---|---|---|
-| plan (Claude Sonnet) | 1 | ~$0.001 | <$0.01 |
-| images (Flux Pro 1.1) | 6 candidates | ~$0.05 | $0.30 |
-| clips (Kling v3 pro, audio off) | 20 keepers × 5s | ~$0.56 | $11.20 |
-| music (CassetteAI) | 1 × 180s | ~$0.20 | $0.20 |
-| sfx (ElevenLabs) | 3 × 30s | ~$0.05 | $0.15 |
-| metadata | 1 | <$0.01 | <$0.01 |
-| **total** | | | **~$12** |
+The shared `StudioShell` component (`web/components/studio-shell.tsx`)
+renders the step ruler, project title, step + total cost badges, job badge,
+and Back/Continue footer.
 
-The Kling line is the dominant cost. Switching Kling models or reducing the
-clip deck is the lever for cost. ffmpeg renders are free but consume CPU/SSD.
+## Real-time mix (Web Audio)
 
-## Common operations
+`web/app/projects/[slug]/studio/mix/page.tsx`:
+- Loads each enabled layer (music + chosen SFX takes) as `AudioBuffer` via
+  fetch + `decodeAudioData`.
+- Per layer: `AudioBufferSourceNode` with `loop = true` → `GainNode` →
+  destination.
+- Slider releases call `gain.setTargetAtTime(value, currentTime, 0.02)` for
+  click-free transitions; checkbox toggles ramp to 0 / unity.
+- "Render exact preview" button calls `/mix/preview` (server ffmpeg mix)
+  for a deterministic audible check before final render.
+- Local mix state debounce-saves to the server (`PUT /mix`) every 500ms so
+  refresh / continue keeps the latest gains.
 
-- **Smoke test (cheapest)**: `firefly init demo "..."`, then `plan`, then
-  `images -n 1`, approve, `clips -n 1`, approve, `loop --duration-min 10`,
-  `audio --silent`, `mux`. Total spend < $1.
-- **Switch the planning model temporarily**: edit `state.json` field
-  `config.plan_model` directly (it's a plain JSON file), then re-run `plan
-  --force`.
-- **Patch a stale fal model path**: edit `config.image_model` /
-  `config.video_model` / `config.music_model` in `state.json`. New defaults
-  in `schemas.py` apply only to projects created after.
-- **Regenerate music with a different mood**: edit
-  `projects/<slug>/plan.json` `music_mood`, then delete
-  `intermediate/music_bed.wav`, then `audio --force`.
+## Provider notes (unchanged from v1, still load-bearing)
 
-## Web app (in progress)
+### fal.ai — images, video, music
 
-We are building a local web app (Next.js + FastAPI) around the CLI pipeline.
-The CLI stays first-class — every web action is a thin wrapper over the same
-stage functions. Phased build:
+- One key (`FAL_KEY`) covers everything.
+- **Kling caps at 15s natively.** Studio's 16–30s clips chain two Kling
+  calls: segment 1 runs from the chosen image; ffmpeg extracts segment 1's
+  last frame; segment 2 starts from that frame; ffmpeg concats. Motion can
+  stutter at the seam; that's a known limitation.
+- Image model path may drift; if a generation 404s, search fal's model
+  directory and patch `StudioConfig.image_model`.
+- Always pass `generate_audio: false` to Kling — we layer audio ourselves.
 
-- **Phase 1: Pipeline refactor** ✅ DONE
-  - `Plan.image_prompts: list[str]` so each candidate image is meaningfully
-    different (different camera angle / composition / lighting); legacy
-    `image_prompt: str` plans coerce automatically.
-  - Defaults: 3 clips per image, 10s each; 3 SFX variations per layer; 3
-    music variations. All overrideable via flags.
-  - `MixConfig` (mix.json) for per-layer gain overrides; `firefly mix
-    preview/lock/show`.
-  - `FinalVariant` (final_variants.json) tracks named renders; `firefly
-    render <slug> <variant> -d <min>` produces additional final MP4s without
-    redoing the costly stages.
-  - `costs.jsonl` append-only log + `firefly cost`; pricing table in
-    `src/firefly/costs.py`.
-- **Phase 2: FastAPI service** ✅ DONE
-  - `src/firefly/api/` package; start with `firefly api` (port 8000).
-  - REST routes for every pipeline stage. Same Python functions as the CLI.
-  - CORS-open to localhost:3000/3001. Project files served at
-    `/files/<slug>/...` via StaticFiles.
-  - Install with `uv sync --extra api`. SSE for live progress streaming is
-    deferred to the wizard phases when it becomes necessary.
-- **Phase 3: Next.js scaffold** ✅ DONE
-  - `web/` is a standard Next.js 16 App Router app (TypeScript, Tailwind 4,
-    shadcn/ui, TanStack Query, react-hook-form, zod). React 19.
-  - `web/lib/types.ts` mirrors `src/firefly/schemas.py` (manual — keep in sync
-    when editing the Python schemas).
-  - `web/lib/api.ts` is a typed client over the FastAPI endpoints; all calls
-    go through `request()` which throws Error(detail) on non-2xx.
-  - Pages: `/` (project list with stage badges), `/new` (create form),
-    `/projects/[slug]` (overview + Plan + Images grid + Clips grid +
-    Finals list). All client components using TanStack Query.
-  - `dev.sh` runs `firefly api` (8000) + `npm run dev` (3000) side by side
-    with Ctrl-C killing both.
-- **Phases 4–7: 9-step wizard** ✅ DONE
-  - `web/app/projects/[slug]/wizard/[step]/page.tsx` per step (plan, images,
-    clips, sfx, music, mix, final).
-  - `WizardLayout` (in `web/components/wizard-layout.tsx`) provides the
-    clickable step indicator, back/continue nav, and a live spend badge that
-    refetches `/api/projects/<slug>/cost` every 10s.
-  - All counts (image candidates, clips per image, SFX variations, music
-    variations) are exposed in the UI so the user controls scope per step.
-  - Per-artifact regen everywhere (image, clip, SFX) with backup-on-write.
-  - Mix step: live sliders + "Render 60s preview" + "Lock mix".
-  - Final step: render named variants (e.g. "30min", "8hr_no_music") from
-    locked sources — pure ffmpeg, no API spend.
-  - SFX/music canonical tracked via sidecar `.pick` files (e.g.
-    `sfx_brook.pick` contains `"v2"`) so the UI knows the current pick
-    without comparing bytes.
+### ElevenLabs — SFX
 
-## Wizard v2 round (feedback-driven revisions)
+- Endpoint: `POST /v1/sound-generation`. Cap is **30s** per call.
+- `loop: true` for seamless ambient — always use it.
+- Restricted API keys only need the **Sound Effects** endpoint enabled.
 
-- **v2-A** ✅ — fixed audio-doesn't-play bug (`.replace` on SFX/music src),
-  mix board auto-renders preview on slider/checkbox change with cache
-  busting, per-layer enable/disable checkbox via `MixConfig.disabled_layers`,
-  clips default `per_image=1` with a "generate N more" pattern.
-- **v2-B** ✅ — dropped the upfront plan editor. Replaced `/wizard/plan`
-  with `/wizard/title` (just working_title + visual_description). Each
-  subsequent step embeds an editor for its own field (`PromptListEditor` for
-  image_prompts and clip_prompts; inline rows for sfx_layers; textarea for
-  music_mood). Saves auto-trigger on generate.
-- **v2-C** ✅ — `PickedImageAnchor` sticky thumbnail + working title at the
-  top of clips, sfx, music, mix, and final pages. Click expands.
-- **v2-D** ✅ — `/projects/<slug>/gallery/images` lists every PNG including
-  `.bakTTT.png` backups, grouped by base ID, with the prompt that produced
-  each (read from sibling `.prompt.txt` for backups). Linked from project
-  detail.
-- **v2-E** ✅ — background jobs + progressive loading via polling.
-  - `State.current_job: JobStatus | None` tracks in-flight work
-    (`{stage, message, started_at, error}`).
-  - `api/jobs.py` `start_job(project, stage, message, fn)` sets
-    `current_job`, runs `fn` in a `ThreadPoolExecutor`, clears on success,
-    sets `error` on failure. Rejects 409 if a job already running and not
-    in error state.
-  - `generateImages`, `generateClips`, `generateSfx`, `generateMusic`, and
-    `render` endpoints now return 202 `{status, job}` immediately.
-  - Frontend: `lib/job-polling.ts` provides `useJobPolling(slug, stages)`
-    and `projectRefetchInterval()` helpers. WizardLayout polls project
-    state every 2s while a job is running; each step's manifest query
-    refetches on the same cadence when its stage matches. Button labels
-    use `current_job` (not `mutation.isPending`) to reflect long-running
-    state. WizardLayout header shows an amber-pulsing badge with the
-    job's stage + message, or a red badge with the error if failed.
+### Claude — not used in Studio
 
-## What's still not built
+The v1 pipeline used Claude to write a structured Plan with image_prompts
+and clip_prompts. Studio drops that — each step's description box is the
+user's direct prompt. Claude is referenced in `StudioConfig.plan_model` for
+backward-compat but no Studio endpoint calls it.
 
-- **Metadata stage** (Claude → `youtube.json` with title, description, tags,
-  AI-disclosure boilerplate). Scaffolding is there but the stage module isn't
-  wired up.
-- **SSE / real-time progress** — polling at 2s is fine for our scale; SSE
-  would feel snappier on long renders but adds complexity.
-- **Granular progress (X of N done)** — `JobStatus` doesn't carry a
-  progress counter yet; the UI infers progress from manifest length, which
-  works for image/clip/sfx/music gen but not for renders where there's no
-  intermediate artifact to count.
-- **Multi-deck randomization** — currently the loop stage builds one session
-  ordering. For 8-hour videos with many clips, shuffling the order each cycle
-  would further reduce perceived repetition. Plumb as a v3 feature only if
-  the single-deck output feels repetitive at scale.
-- **Topaz / fal upscaler integration** — for 4K outputs viewers play on big
-  TVs. Currently 1080p only by default. The `resolution` config field
-  accepts `4k` and downstream ffmpeg honors it; we just don't have an AI
-  upscaling step.
+## Cost tracking
 
-## Conventions to follow when editing
+- Every provider call records to `projects/<slug>/costs.jsonl` via
+  `costs.record(project_proxy, provider, model, stage, ...)`.
+- The stage name normalizes legacy values (`images` → `image`, `clips` →
+  `clip`, `audio` → `sfx`, `mux` → `render`) so cost-by-step is uniform.
+- `GET /api/projects/<slug>/cost-by-step` returns
+  `{by_step: {image: 0.20, clip: 1.12, sfx: 0.15, music: 0.06, render: 0}, total_usd: 1.53}`.
+- Wizard shell shows `this step $X · total $Y` in every step's header.
 
-- **Provider modules raise plain RuntimeError**, never custom exception
-  classes. The CLI's top-level `main()` catches everything and prints a
-  one-line message — keep the messages short and actionable.
-- **Stages are functions named `run(project, *, ...) -> None`**, not classes.
-  They mutate state via `project.save_state(...)` and write files; they
-  return nothing.
-- **All paths go through `Project` properties** (`project.images_dir`,
-  `project.video_track_path`, etc.). Do not construct paths from string
-  concatenation elsewhere — it makes moving the project layout painful.
-- **Atomic state writes**: always `project.save_state(state)`, never write
-  `state.json` directly. The `_atomic_write_text` helper handles temp file
-  + rename.
-- **Friendly errors**: a missing API key should raise via `require_env(...)`
-  with a URL the user can visit. A bad model path should surface the
-  provider's own error message. Don't wrap everything in try/except —
-  the top-level handler does that.
-- **Cost guards**: any new generative stage MUST default to a small count
-  (1–6) and require an explicit flag/argument to scale up. Never default to
-  generating 20 of something.
-- **One canonical name per artifact**: the artifact ID the user types on the
-  CLI must equal the filename stem on disk. Clip IDs are `img_01_01` (not
-  `clip_001`) so the file `clips/img_01_01.mp4` is unambiguous. When adding a
-  new artifact type, follow this rule.
-- **Always back up before overwrite**: any operation that regenerates a
-  user-reviewed artifact (image, clip, SFX) must rename the previous version
-  to `<stem>.bak<ts>.<ext>` first. Losing user-approved work because of a
-  blind overwrite is the worst kind of UX failure here.
-- **Record every billable call**: a stage that calls a paid API MUST follow
-  the call with `costs.record(project, provider=..., model=..., stage=...,
-  artifact_id=..., units=...)`. Otherwise the cost dashboard lies. Add new
-  (provider, model) pairs to `costs.PRICING` when introducing them.
-- **Variation pattern**: any user-choosable asset (SFX layer, music bed, and
-  the upcoming clip variants) follows the same canonical-vs-variation pattern:
-  generate `<base>_v1.<ext>`, `_v2.<ext>`, … in `intermediate/`, copy v1 over
-  the canonical `<base>.<ext>` as a default. Add a `firefly pick <kind>
-  <slug> [name] vN` command to swap, then `audio --force && mux --force`
-  (or `render`) to remix.
+## Background jobs
 
-## Environment quirks
+Generation endpoints (image, clip, sfx, music, mix preview, final render)
+return `202 + JobStatus` and submit work to a `ThreadPoolExecutor`. The job
+runner (`src/firefly/api/jobs.py`) sets `state.current_job` before running
+and clears it on success (or records the error on failure). Frontend polls
+project state every 2s while a job is running. On server restart, an
+on-startup hook marks any lingering `current_job` as "interrupted".
 
-- macOS / Apple Silicon. ffmpeg installed via Homebrew.
-- Python 3.12 required (managed by `uv`).
+## CLI (legacy, still works)
+
+`firefly` (typer-based) operates on the v1 schema in
+`src/firefly/stages/*`. After the Studio rewrite it's no longer the primary
+interface but remains for power-user / scripting use on existing v1
+projects. New Studio projects don't have v1 files; CLI commands that read
+`state.json` / `plan.json` will fail on them — that's expected. Studio
+projects live entirely in `project.json`.
+
+The legacy schemas in `src/firefly/schemas.py` are kept alive for the CLI
+and for backward-compat reading by `StudioStore._migrate_from_legacy`.
+
+## Conventions when editing
+
+- **Schema lives in `src/firefly/studio.py`**. Mirror changes in
+  `web/lib/types.ts` (no codegen yet).
+- **Studio jobs in `src/firefly/studio_jobs.py`**. Each function loads the
+  project, generates, writes a new `Attempt` to disk + `.meta.json`,
+  appends to `project.json`, records cost.
+- **API routes in `src/firefly/api/routes/studio.py`**. One coherent
+  `/api/projects/*` surface. Generation routes return 202 with a
+  `JobStatus`. Select / confirm are synchronous.
+- **Studio frontend pages share the StudioShell**. Don't duplicate header
+  scaffolding; pass content as children.
+- **Polling is centralized in StudioShell**. Individual pages don't need
+  to manage `refetchInterval` for the project query unless they need
+  per-step polling above and beyond.
+- **Atomic writes**: `StudioStore.save()` uses temp file + `os.replace`.
+  Never write `project.json` directly.
+- **Backup on overwrite**: not needed in the Studio model — every
+  generation produces a new `vN` attempt. The "previous version" is
+  always still in `attempts/`.
+- **Record every billable call**: any new provider call MUST follow with
+  `costs.record(...)`. Add new (provider, model) pairs to
+  `costs.PRICING`.
+
+## What's not built
+
+- **YouTube upload / metadata**: no `youtube.json` generator yet.
+- **Mobile UI**: desktop-first; doesn't break on iPad but isn't optimized.
+- **Auth / multi-user**: single user, local only. No login.
+- **Cross-project asset reuse**: each project is isolated; no "use this
+  image in a new project" action.
+- **Real chained-clip quality**: 16–30s clips work but seam quality varies.
+  Future work: train a per-clip transition smoother, or wait for a model
+  that does longer natively.
+
+## Environment
+
+- macOS / Apple Silicon. ffmpeg + uv installed via Homebrew.
+- Python 3.12; Node 24+ for the web app.
 - The user has explicitly asked: **do not read or print the contents of
-  `.env`**. Trust the SDK to pick up keys via env vars; verify success from
-  command behavior, not file inspection. See
-  `~/.claude/projects/.../memory/feedback_env_secrets.md`.
+  `.env`**. Verify keys by running, not by inspecting.
 
 ## Recent decisions
 
-- Switched music generation from Suno → fal (CassetteAI). Reason: no official
-  Suno API; third-party wrappers are unstable.
-- Switched Kling from v2 → v3 pro. Reason: v2 path was 404'd by fal.
-- Audio sub-artifacts (`music_bed.wav`, `sfx_*.mp3`) are sticky across
-  `--force` runs. Reason: avoid surprise re-spend; remix is the cheap part.
-- `loop_concat` uses `-c:v copy`. Reason: 8-hour H.264 re-encode is a 5–10
-  minute job; copy is instantaneous and the upstream stages already produced
-  the correct format.
-- Clip IDs were unified with their filenames (`img_01_01` instead of
-  `clip_001`). Reason: user had to juggle two parallel naming schemes — the
-  CLI ID vs. the filename — and got annoyed translating between them. ID ==
-  filename stem now.
-- All `regen` commands back up the prior artifact before overwriting.
-  Reason: a blind overwrite in an early regen wiped a clip the user wanted to
-  keep. Lost user work is the cardinal sin here, so backup-on-write is now
-  enforced in code, not convention.
-- Default Kling negative prompt now suppresses random sparkles, dust motes,
-  ambient light pulses across the room, ember showers, and "snowflakes
-  indoors." Reason: Kling's defaults love these artifacts and they look
-  unnatural in long ambient shots. Add new project-specific suppressions to
-  the negative prompt before regenerating clips.
-- `--no-music` flag added to the audio stage. Reason: some videos (nature
-  scenes with strong primary SFX, e.g. brook foreground) read as more
-  authentic with no music bed at all. The plan generator sets `music_mood:
-  "None — no background music"` for these but the CLI still needs the flag
-  to honor it.
-- Image candidates use 6 varied prompts from Claude (cycled if user wants
-  more) instead of N renders of the same prompt. Reason: earlier batches
-  looked nearly identical because fal randomness alone barely changes the
-  composition — Claude varying camera angle / framing / lighting in the
-  prompt itself gives meaningfully different candidates.
-- Default clip duration bumped 5s → 10s; default per-image count 4 → 3.
-  Reason: a single 10-sec session, once made loopable, gives more visual
-  variety per loop than four 5-sec clips back-to-back; and the user is
-  picking just one anyway, so generating fewer candidates saves money.
-- SFX & music variations are produced by default (3 each), not lazily via
-  a separate `regen` command. Reason: the user almost always wants A/B/C
-  comparison; making it the default avoids a second round trip. `pick sfx`
-  / `pick music` promote the winner; `regen sfx` is still there for when
-  the prompt itself needs revision.
-- Render is split from mux. Reason: `mux` produces the primary
-  `<slug>_<duration>min.mp4` from the canonical video+audio tracks. `render`
-  produces named variants (`<slug>_<variant>.mp4`) at arbitrary durations
-  with arbitrary mix overrides — no API calls, just ffmpeg.
+- **Studio rewrite (this iteration)**: replaced "generate N variations,
+  pick one" with one-at-a-time + retry. Plan-generation step removed.
+  Project.json replaces state.json + plan.json + manifests + mix.json +
+  final_variants.json. Old v1 wizard frontend deleted; old API routes
+  unregistered and their files removed.
+- **30s clip cap with 15s chaining**: user wanted up to 30s clips but
+  Kling natively caps at 15s. Studio chains two Kling calls for 16-30s.
+- **Real-time + exact preview for mix**: Web Audio for instant feedback
+  while sliding, ffmpeg for deterministic preview before final render.
+- **Auto-migrate legacy projects on first read**: `StudioStore.load()`
+  detects a missing `project.json` and builds one from the old files.
+  Old files stay on disk; their paths are referenced from the new
+  attempts list so legacy assets play back through the new UI.
+- **Slug auto-suffix on collision**: avoids rejecting the user with an
+  error; the live preview shows the final slug.
