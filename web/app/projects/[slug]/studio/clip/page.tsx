@@ -1,0 +1,296 @@
+"use client";
+
+import { use, useEffect, useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { api, projectFileUrl } from "@/lib/api";
+import { StudioShell } from "@/components/studio-shell";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import type { StudioProject } from "@/lib/types";
+
+function estimateSeconds(durationS: number): [number, number] {
+  // Kling v3 pro: ~6× clip duration empirically; chained pair takes ~2x.
+  const base = durationS * 6;
+  const upper = base * 1.5;
+  return durationS > 15 ? [Math.round(base * 1.6), Math.round(upper * 1.6)] : [Math.round(base), Math.round(upper)];
+}
+
+export default function ClipStepPage({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}) {
+  const { slug } = use(params);
+  const queryClient = useQueryClient();
+  const projectQ = useQuery({
+    queryKey: ["project", slug],
+    queryFn: () => api.getProject(slug),
+    retry: false,
+    refetchInterval: (q) => {
+      const data = q.state.data as StudioProject | undefined;
+      return data?.current_job && !data.current_job.error ? 2000 : false;
+    },
+  });
+  const project = projectQ.data;
+
+  const [motionPrompts, setMotionPrompts] = useState<string[]>([""]);
+  const [duration, setDuration] = useState(10);
+  const [activeAttemptId, setActiveAttemptId] = useState<string | null>(null);
+
+  // Init from project + auto-pick newest attempt.
+  useEffect(() => {
+    if (!project) return;
+    if (motionPrompts.length === 1 && motionPrompts[0] === "" && project.clip.motion_prompts.length) {
+      setMotionPrompts(project.clip.motion_prompts);
+    }
+    if (project.clip.duration_s) setDuration(project.clip.duration_s);
+    const latest = project.clip.attempts.at(-1);
+    if (latest && latest.id !== activeAttemptId) setActiveAttemptId(latest.id);
+    if (project.clip.attempts.length === 0) setActiveAttemptId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.clip.attempts.length, project?.clip.duration_s]);
+
+  const isGenerating =
+    project?.current_job?.stage === "clip" && !project.current_job.error;
+
+  // Image anchor
+  const imageAttempt = project?.image.attempts.find(
+    (a) => a.id === project.image.chosen_attempt_id,
+  );
+
+  const generate = useMutation({
+    mutationFn: () =>
+      api.clipGenerate(
+        slug,
+        motionPrompts.map((p) => p.trim()).filter(Boolean),
+        duration,
+      ),
+    onSuccess: () => {
+      toast.success("Clip generation started");
+      queryClient.invalidateQueries({ queryKey: ["project", slug] });
+      queryClient.invalidateQueries({ queryKey: ["cost-by-step", slug] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  async function confirm() {
+    if (!activeAttemptId) return;
+    await api.clipSelect(slug, activeAttemptId);
+    await api.clipConfirm(slug);
+    queryClient.invalidateQueries({ queryKey: ["project", slug] });
+  }
+
+  function pickAttempt(id: string) {
+    setActiveAttemptId(id);
+    const a = project?.clip.attempts.find((x) => x.id === id);
+    if (a) {
+      const cfg = a.config as { motion_prompts?: string[]; duration_s?: number };
+      if (cfg.motion_prompts) setMotionPrompts(cfg.motion_prompts.length ? cfg.motion_prompts : [""]);
+      if (cfg.duration_s) setDuration(cfg.duration_s);
+    }
+  }
+
+  const durationValid = duration >= 1 && duration <= 30;
+  const canGenerate = durationValid && !isGenerating && !generate.isPending;
+  const [estLow, estHigh] = estimateSeconds(duration);
+  const activeAttempt = project?.clip.attempts.find((a) => a.id === activeAttemptId);
+
+  if (!project) {
+    return <StudioShell slug={slug} step="clip" title="Clip" hideFooter>Loading…</StudioShell>;
+  }
+  if (!imageAttempt) {
+    return (
+      <StudioShell slug={slug} step="clip" title="Clip" hideFooter>
+        <Card>
+          <CardContent className="py-10 text-center text-muted-foreground">
+            Confirm an image in the previous step first.
+          </CardContent>
+        </Card>
+      </StudioShell>
+    );
+  }
+
+  return (
+    <StudioShell
+      slug={slug}
+      step="clip"
+      title="Clip"
+      description="Describe the motion you want — fire flickering, snow falling, steam rising. The clip will loop the source motion in the final video."
+      onContinue={confirm}
+      continueLabel={activeAttempt ? "Confirm clip" : "Generate a clip first"}
+      continueDisabled={!activeAttempt}
+    >
+      {/* Image anchor */}
+      <Card>
+        <CardContent className="p-3">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={projectFileUrl(slug, imageAttempt.filename)}
+            alt="confirmed scene"
+            className="w-full rounded-md"
+          />
+          <div className="text-xs text-muted-foreground mt-2 line-clamp-2">
+            {imageAttempt.prompt}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Motion prompts editor */}
+      <Card>
+        <CardContent className="py-6 space-y-3">
+          <div className="flex items-center justify-between">
+            <Label>Motion prompts</Label>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setMotionPrompts([...motionPrompts, ""])}
+            >
+              + Add motion prompt
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Each prompt describes a thing in the image you want to move. Look at
+            the picture above and describe motion for the elements you see.
+          </p>
+          {motionPrompts.map((p, i) => (
+            <div key={i} className="flex gap-2">
+              <Textarea
+                rows={2}
+                value={p}
+                onChange={(e) => {
+                  const next = [...motionPrompts];
+                  next[i] = e.target.value;
+                  setMotionPrompts(next);
+                }}
+                placeholder="e.g. snow falling steadily outside the tall arched windows"
+                className="flex-1"
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setMotionPrompts(motionPrompts.filter((_, idx) => idx !== i))}
+                disabled={motionPrompts.length <= 1}
+              >
+                ×
+              </Button>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      {/* Duration + generate */}
+      <Card>
+        <CardContent className="py-4 flex items-end gap-4">
+          <div className="flex-1 space-y-2">
+            <Label htmlFor="duration">Clip duration (seconds)</Label>
+            <p className="text-xs text-muted-foreground">
+              1–30s. Above 15s = chained 2-shot (motion stutters slightly at the seam).
+              ~$1.12 per 10 seconds.
+            </p>
+          </div>
+          <div className="space-y-1">
+            <Input
+              id="duration"
+              type="number"
+              min={1}
+              max={30}
+              value={duration}
+              onChange={(e) => setDuration(Number(e.target.value))}
+              className={`w-24 text-base ${!durationValid ? "border-red-500" : ""}`}
+            />
+            {!durationValid && (
+              <p className="text-xs text-red-600">must be 1–30</p>
+            )}
+          </div>
+          <Button size="lg" onClick={() => generate.mutate()} disabled={!canGenerate}>
+            {isGenerating
+              ? "Generating…"
+              : project.clip.attempts.length
+              ? "Retry"
+              : "Generate"}
+          </Button>
+        </CardContent>
+      </Card>
+
+      {/* Active clip */}
+      {(isGenerating || activeAttempt) && (
+        <Card>
+          <CardContent className="p-3 space-y-3">
+            <div className="relative bg-black rounded-md overflow-hidden">
+              {activeAttempt ? (
+                <video
+                  src={projectFileUrl(slug, activeAttempt.filename)}
+                  controls
+                  autoPlay
+                  muted
+                  loop
+                  className="w-full aspect-video"
+                  key={activeAttempt.id}
+                />
+              ) : (
+                <div className="aspect-video flex items-center justify-center text-muted-foreground" />
+              )}
+              {isGenerating && (
+                <div className="absolute inset-0 bg-background/80 flex items-center justify-center">
+                  <div className="text-center space-y-2">
+                    <div className="inline-block w-8 h-8 rounded-full bg-amber-500 shadow-[0_0_24px_rgba(245,158,11,0.6)] animate-pulse" />
+                    <p className="font-semibold">Generating {duration}s clip…</p>
+                    <p className="text-xs text-muted-foreground">
+                      ~{estLow}–{estHigh} seconds {duration > 15 && "(chained 2-shot)"}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+            {activeAttempt && (
+              <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
+                <span className="font-mono">
+                  {activeAttempt.id} · {(activeAttempt.config as { duration_s?: number }).duration_s}s
+                  {(activeAttempt.config as { chained?: boolean }).chained && " (chained)"}
+                </span>
+                <span>{new Date(activeAttempt.created_at).toLocaleString()}</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* History strip */}
+      {project.clip.attempts.length > 1 && (
+        <div>
+          <Label className="text-xs">History ({project.clip.attempts.length} attempts)</Label>
+          <div className="flex gap-2 overflow-x-auto pb-2 mt-2">
+            {project.clip.attempts.map((a) => {
+              const active = a.id === activeAttemptId;
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() => pickAttempt(a.id)}
+                  className={`flex-shrink-0 rounded-md overflow-hidden border-2 ${
+                    active ? "border-amber-500" : "border-transparent hover:border-foreground/30"
+                  }`}
+                  title={a.prompt}
+                >
+                  <video
+                    src={projectFileUrl(slug, a.filename)}
+                    muted
+                    preload="metadata"
+                    className="h-20 aspect-video object-cover bg-black"
+                  />
+                  <div className="text-[10px] font-mono text-center py-0.5">
+                    {a.id} · {(a.config as { duration_s?: number }).duration_s}s
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </StudioShell>
+  );
+}
