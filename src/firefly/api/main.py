@@ -23,15 +23,11 @@ from ..schemas import JobStatus
 
 logger = logging.getLogger("firefly.api")
 from .routes import (
-    audio as audio_routes,
-    clips as clips_routes,
     cost as cost_routes,
-    images as images_routes,
-    mix as mix_routes,
-    plan as plan_routes,
-    projects as projects_routes,
-    render as render_routes,
+    studio as studio_routes,
 )
+# Legacy v1 routers are no longer registered — superseded by `studio_routes`.
+# They live on disk until phase 12 cleanup so we can diff against them.
 
 
 def create_app() -> FastAPI:
@@ -97,13 +93,9 @@ def create_app() -> FastAPI:
     def health():
         return {"status": "ok", "projects_root": str(PROJECTS_ROOT.resolve())}
 
-    app.include_router(projects_routes.router)
-    app.include_router(plan_routes.router)
-    app.include_router(images_routes.router)
-    app.include_router(clips_routes.router)
-    app.include_router(audio_routes.router)
-    app.include_router(mix_routes.router)
-    app.include_router(render_routes.router)
+    # Studio routes own the /api/projects surface (gallery, CRUD, per-step
+    # generate/select/confirm, mix, final render). Cost lives in its own module.
+    app.include_router(studio_routes.router)
     app.include_router(cost_routes.router)
 
     # File serving: projects/<slug>/... is reachable at /files/<slug>/...
