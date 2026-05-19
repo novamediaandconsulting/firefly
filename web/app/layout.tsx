@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "firefly",
+  title: "Firefly Studio",
   description: "Cozy ambient long-form video generation",
 };
 
@@ -39,19 +39,8 @@ export default function RootLayout({
                 className="flex items-center gap-2.5 text-xl font-extrabold tracking-tight hover:opacity-80 transition-opacity"
               >
                 <span className="inline-block w-3 h-3 rounded-full bg-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.6)]" />
-                firefly
+                Firefly Studio
               </Link>
-              <nav className="flex items-center gap-5 text-sm font-semibold text-muted-foreground">
-                <Link href="/" className="hover:text-foreground transition-colors">
-                  Projects
-                </Link>
-                <Link href="/new" className="hover:text-foreground transition-colors">
-                  New
-                </Link>
-                <Link href="/design" className="hover:text-foreground transition-colors">
-                  Design
-                </Link>
-              </nav>
             </div>
           </header>
           <main className="flex-1">{children}</main>

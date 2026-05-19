@@ -4,26 +4,30 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
-import { projectRefetchInterval } from "@/lib/job-polling";
-import { WIZARD_STEPS, type WizardStepId, nextStep, prevStep } from "@/lib/wizard";
+import {
+  STUDIO_STEPS,
+  type StudioStepId,
+  nextStep as nextStepId,
+  prevStep as prevStepId,
+  isStepDone,
+} from "@/lib/studio-steps";
+import { Button } from "@/components/ui/button";
+import type { StudioProject } from "@/lib/types";
 
-interface WizardLayoutProps {
+interface StudioShellProps {
   slug: string;
-  step: WizardStepId;
+  step: StudioStepId;
   title: string;
   description?: string;
   children: React.ReactNode;
-  /** If provided, "Continue" is enabled and triggers this callback before navigating. */
   onContinue?: () => Promise<void> | void;
   continueLabel?: string;
   continueDisabled?: boolean;
-  /** Hide the next/back footer entirely (for steps that are still incomplete). */
   hideFooter?: boolean;
 }
 
-export function WizardLayout({
+export function StudioShell({
   slug,
   step,
   title,
@@ -33,27 +37,30 @@ export function WizardLayout({
   continueLabel = "Continue",
   continueDisabled = false,
   hideFooter = false,
-}: WizardLayoutProps) {
+}: StudioShellProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const next = nextStep(step);
-  const prev = prevStep(step);
-  const costQ = useQuery({
-    queryKey: ["cost", slug],
-    queryFn: () => api.getCost(slug),
-    retry: false,
-    refetchInterval: 10_000, // refresh during long-running gen steps
-  });
-  // Drive project polling for the entire wizard — when a background job is
-  // running, this query refetches every 2s and invalidates dependent manifest
-  // queries via TanStack's normal flow.
-  const stateQ = useQuery({
+
+  const projectQ = useQuery({
     queryKey: ["project", slug],
     queryFn: () => api.getProject(slug),
     retry: false,
-    refetchInterval: projectRefetchInterval(),
+    refetchInterval: (q) => {
+      const data = q.state.data as StudioProject | undefined;
+      return data?.current_job && !data.current_job.error ? 2000 : false;
+    },
   });
-  const job = stateQ.data?.current_job ?? null;
+
+  const costQ = useQuery({
+    queryKey: ["cost-by-step", slug],
+    queryFn: () => api.costByStep(slug),
+    retry: false,
+    refetchInterval: 10_000,
+  });
+
+  const project = projectQ.data;
+  const job = project?.current_job ?? null;
+
   const clearJob = useMutation({
     mutationFn: () => api.clearJob(slug),
     onSuccess: () => {
@@ -63,21 +70,24 @@ export function WizardLayout({
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const next = nextStepId(step);
+  const prev = prevStepId(step);
+
   async function handleContinue() {
     if (onContinue) await onContinue();
-    if (next) router.push(`/projects/${slug}/wizard/${next}`);
-    else router.push(`/projects/${slug}`);
+    if (next) router.push(`/projects/${slug}/studio/${next}`);
+    else router.push("/");
   }
 
+  const stepCost = costQ.data?.by_step[step] ?? 0;
+  const totalCost = costQ.data?.total_usd ?? 0;
+
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8 space-y-8">
-      {/* breadcrumb + job/cost */}
-      <div className="flex items-center justify-between gap-4">
-        <Link
-          href={`/projects/${slug}`}
-          className="text-sm text-muted-foreground hover:text-foreground"
-        >
-          ← back to project
+    <div className="mx-auto max-w-5xl px-6 py-8 space-y-8">
+      {/* breadcrumb + costs */}
+      <div className="flex items-center justify-between gap-4 text-sm">
+        <Link href="/" className="text-muted-foreground hover:text-foreground">
+          ← all projects
         </Link>
         <div className="flex items-center gap-3">
           {job && (
@@ -106,14 +116,13 @@ export function WizardLayout({
                 <>
                   <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
                   <span>
-                    <span className="font-semibold">{job.stage}:</span>{" "}
-                    {job.message}
+                    <span className="font-semibold">{job.stage}:</span> {job.message}
                   </span>
                   <button
                     type="button"
                     onClick={() => clearJob.mutate()}
-                    className="text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-                    title="Force-clear the job state. Doesn't kill the worker; use only if the job hung."
+                    className="text-muted-foreground hover:text-foreground"
+                    title="Force-clear (worker keeps running; use only if stuck)"
                   >
                     cancel
                   </button>
@@ -121,37 +130,49 @@ export function WizardLayout({
               )}
             </div>
           )}
-          {costQ.data && (
-            <div className="text-xs text-muted-foreground">
-              spent{" "}
-              <span className="font-mono text-foreground">
-                ${costQ.data.total_usd.toFixed(2)}
-              </span>
-            </div>
-          )}
+          <span className="text-xs text-muted-foreground">
+            this step{" "}
+            <span className="font-mono text-foreground">${stepCost.toFixed(2)}</span>
+            {" · "}
+            total{" "}
+            <span className="font-mono text-foreground">${totalCost.toFixed(2)}</span>
+          </span>
         </div>
       </div>
 
-      {/* step indicator */}
-      <nav className="flex items-center gap-1 text-xs overflow-x-auto">
-        {WIZARD_STEPS.map((s, i) => {
+      {/* project title strip */}
+      {project && (
+        <div className="flex items-center justify-between gap-3 pb-1">
+          <h2 className="text-base font-semibold truncate">{project.title}</h2>
+          <Link
+            href={`/projects/${slug}/studio/title`}
+            className="text-xs text-muted-foreground hover:text-foreground"
+          >
+            rename
+          </Link>
+        </div>
+      )}
+
+      {/* step ruler */}
+      <nav className="flex items-center gap-1 text-sm overflow-x-auto">
+        {STUDIO_STEPS.map((s, i) => {
+          const done = project ? isStepDone(project, s.id) : false;
           const isCurrent = s.id === step;
-          const isPast =
-            WIZARD_STEPS.findIndex((x) => x.id === step) > i;
           return (
             <Link
               key={s.id}
-              href={`/projects/${slug}/wizard/${s.id}`}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md transition-colors ${
+              href={`/projects/${slug}/studio/${s.id}`}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-md transition-colors whitespace-nowrap ${
                 isCurrent
-                  ? "bg-foreground text-background font-medium"
-                  : isPast
+                  ? "bg-amber-500 text-white font-bold shadow-sm"
+                  : done
                   ? "text-foreground hover:bg-muted"
                   : "text-muted-foreground hover:bg-muted"
               }`}
             >
-              <span className="font-mono">{i + 1}.</span>
+              <span className="font-mono text-xs opacity-70">{i + 1}.</span>
               <span>{s.label}</span>
+              {done && !isCurrent && <span className="text-emerald-600">✓</span>}
             </Link>
           );
         })}
@@ -159,9 +180,9 @@ export function WizardLayout({
 
       {/* heading */}
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+        <h1>{title}</h1>
         {description && (
-          <p className="text-sm text-muted-foreground mt-1">{description}</p>
+          <p className="text-lg text-muted-foreground mt-2">{description}</p>
         )}
       </div>
 
@@ -173,13 +194,13 @@ export function WizardLayout({
             variant="ghost"
             onClick={() =>
               prev
-                ? router.push(`/projects/${slug}/wizard/${prev}`)
-                : router.push(`/projects/${slug}`)
+                ? router.push(`/projects/${slug}/studio/${prev}`)
+                : router.push("/")
             }
           >
             ← Back
           </Button>
-          <Button onClick={handleContinue} disabled={continueDisabled}>
+          <Button onClick={handleContinue} disabled={continueDisabled} size="lg">
             {continueLabel} →
           </Button>
         </div>

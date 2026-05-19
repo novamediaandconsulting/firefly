@@ -1,22 +1,16 @@
-// Typed client for the firefly FastAPI service.
+// Typed client for the Firefly Studio FastAPI service.
 //
 // All calls go through `request()` which throws Error(detail) on non-2xx.
 // File URLs use the `/files/<slug>/...` static mount on the same backend.
 
 import type {
-  ClipManifest,
+  Attempt,
+  CostByStep,
   CostSummary,
-  CreateProjectRequest,
-  FinalVariants,
-  ImageGalleryResponse,
-  ImageManifest,
   JobStartedResponse,
-  MixConfig,
-  MusicState,
-  Plan,
   ProjectSummary,
-  SfxState,
-  State,
+  SlugPreview,
+  StudioProject,
 } from "./types";
 
 const API_BASE =
@@ -45,189 +39,149 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-export const fileUrl = (relPath: string): string =>
-  `${API_BASE}/files/${relPath}`;
-
 export const projectFileUrl = (slug: string, relPath: string): string =>
   `${API_BASE}/files/${slug}/${relPath}`;
 
 export const api = {
-  health: () => request<{ status: string; projects_root: string }>("/api/health"),
+  health: () => request<{ status: string }>("/api/health"),
 
   // ---- projects ----
   listProjects: () => request<ProjectSummary[]>("/api/projects"),
-  getProject: (slug: string) => request<State>(`/api/projects/${slug}`),
-  createProject: (req: CreateProjectRequest) =>
-    request<State>("/api/projects", {
+  getProject: (slug: string) => request<StudioProject>(`/api/projects/${slug}`),
+  createProject: (title: string) =>
+    request<StudioProject>("/api/projects", {
       method: "POST",
-      body: JSON.stringify(req),
+      body: JSON.stringify({ title }),
     }),
   deleteProject: (slug: string) =>
     request<void>(`/api/projects/${slug}?confirm=true`, { method: "DELETE" }),
   clearJob: (slug: string) =>
-    request<State>(`/api/projects/${slug}/job`, { method: "DELETE" }),
+    request<StudioProject>(`/api/projects/${slug}/job`, { method: "DELETE" }),
+  updateTitle: (slug: string, title: string) =>
+    request<StudioProject>(`/api/projects/${slug}/title`, {
+      method: "PUT",
+      body: JSON.stringify({ title }),
+    }),
+  slugPreview: (title: string) =>
+    request<SlugPreview>(`/api/projects/slug-preview?title=${encodeURIComponent(title)}`),
+  costByStep: (slug: string) =>
+    request<CostByStep>(`/api/projects/${slug}/cost-by-step`),
+  cost: (slug: string) => request<CostSummary>(`/api/projects/${slug}/cost`),
 
-  // ---- plan ----
-  getPlan: (slug: string) => request<Plan>(`/api/projects/${slug}/plan`),
-  generatePlan: (slug: string, force = false) =>
-    request<Plan>(
-      `/api/projects/${slug}/plan${force ? "?force=true" : ""}`,
+  // ---- image step ----
+  imageGenerate: (slug: string, prompt: string, resolution: string) =>
+    request<JobStartedResponse>(`/api/projects/${slug}/image/generate`, {
+      method: "POST",
+      body: JSON.stringify({ prompt, resolution }),
+    }),
+  imageSelect: (slug: string, attemptId: string) =>
+    request<Attempt>(`/api/projects/${slug}/image/select/${attemptId}`, { method: "POST" }),
+  imageConfirm: (slug: string) =>
+    request<StudioProject>(`/api/projects/${slug}/image/confirm`, { method: "POST" }),
+  imageUnconfirm: (slug: string) =>
+    request<StudioProject>(`/api/projects/${slug}/image/unconfirm`, { method: "POST" }),
+
+  // ---- clip step ----
+  clipGenerate: (slug: string, motionPrompts: string[], durationS: number) =>
+    request<JobStartedResponse>(`/api/projects/${slug}/clip/generate`, {
+      method: "POST",
+      body: JSON.stringify({ motion_prompts: motionPrompts, duration_s: durationS }),
+    }),
+  clipSelect: (slug: string, attemptId: string) =>
+    request<Attempt>(`/api/projects/${slug}/clip/select/${attemptId}`, { method: "POST" }),
+  clipConfirm: (slug: string) =>
+    request<StudioProject>(`/api/projects/${slug}/clip/confirm`, { method: "POST" }),
+  clipUnconfirm: (slug: string) =>
+    request<StudioProject>(`/api/projects/${slug}/clip/unconfirm`, { method: "POST" }),
+
+  // ---- sfx step ----
+  sfxAddLayer: (slug: string, title: string, prompt = "", gainDb = -12) =>
+    request<StudioProject>(`/api/projects/${slug}/sfx/layers`, {
+      method: "POST",
+      body: JSON.stringify({ title, prompt, gain_db: gainDb }),
+    }),
+  sfxUpdateLayer: (
+    slug: string,
+    layerId: string,
+    patch: { title?: string; prompt?: string; gain_db?: number; enabled_in_mix?: boolean },
+  ) =>
+    request<StudioProject>(`/api/projects/${slug}/sfx/layers/${layerId}`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
+  sfxDeleteLayer: (slug: string, layerId: string) =>
+    request<StudioProject>(`/api/projects/${slug}/sfx/layers/${layerId}`, {
+      method: "DELETE",
+    }),
+  sfxGenerate: (slug: string, layerId: string, title: string, prompt: string, gainDb: number) =>
+    request<JobStartedResponse>(
+      `/api/projects/${slug}/sfx/layers/${layerId}/generate`,
+      {
+        method: "POST",
+        body: JSON.stringify({ title, prompt, gain_db: gainDb }),
+      },
+    ),
+  sfxSelect: (slug: string, layerId: string, attemptId: string) =>
+    request<Attempt>(
+      `/api/projects/${slug}/sfx/layers/${layerId}/select/${attemptId}`,
       { method: "POST" },
     ),
-  updatePlan: (slug: string, plan: Plan) =>
-    request<Plan>(`/api/projects/${slug}/plan`, {
-      method: "PUT",
-      body: JSON.stringify(plan),
-    }),
+  sfxConfirm: (slug: string) =>
+    request<StudioProject>(`/api/projects/${slug}/sfx/confirm`, { method: "POST" }),
+  sfxUnconfirm: (slug: string) =>
+    request<StudioProject>(`/api/projects/${slug}/sfx/unconfirm`, { method: "POST" }),
 
-  // ---- images ----
-  getImages: (slug: string) =>
-    request<ImageManifest>(`/api/projects/${slug}/images`),
-  generateImages: (slug: string, count = 4, force = false) =>
-    request<JobStartedResponse>(`/api/projects/${slug}/images`, {
-      method: "POST",
-      body: JSON.stringify({ count, force }),
-    }),
-  approveImages: (slug: string, ids: string[]) =>
-    request<ImageManifest>(`/api/projects/${slug}/images/approve`, {
-      method: "POST",
-      body: JSON.stringify({ ids }),
-    }),
-  regenImage: (slug: string, imageId: string, prompt?: string) =>
-    request<ImageManifest>(
-      `/api/projects/${slug}/images/${imageId}/regen`,
-      { method: "POST", body: JSON.stringify({ prompt: prompt ?? null }) },
-    ),
-  getImageGallery: (slug: string) =>
-    request<ImageGalleryResponse>(`/api/projects/${slug}/images/gallery`),
-
-  // ---- clips ----
-  getClips: (slug: string) =>
-    request<ClipManifest>(`/api/projects/${slug}/clips`),
-  generateClips: (slug: string, perImage = 3, force = false) =>
-    request<JobStartedResponse>(`/api/projects/${slug}/clips`, {
-      method: "POST",
-      body: JSON.stringify({ per_image: perImage, force }),
-    }),
-  approveClips: (slug: string, ids: string[]) =>
-    request<ClipManifest>(`/api/projects/${slug}/clips/approve`, {
-      method: "POST",
-      body: JSON.stringify({ ids }),
-    }),
-  unapproveClips: (slug: string, ids: string[]) =>
-    request<ClipManifest>(`/api/projects/${slug}/clips/unapprove`, {
-      method: "POST",
-      body: JSON.stringify({ ids }),
-    }),
-  unapproveImages: (slug: string, ids: string[]) =>
-    request<ImageManifest>(`/api/projects/${slug}/images/unapprove`, {
-      method: "POST",
-      body: JSON.stringify({ ids }),
-    }),
-  regenClip: (slug: string, clipId: string, prompt?: string) =>
-    request<ClipManifest>(
-      `/api/projects/${slug}/clips/${clipId}/regen`,
-      { method: "POST", body: JSON.stringify({ prompt: prompt ?? null }) },
-    ),
-  buildLoop: (slug: string, durationMin?: number, force = false) =>
-    request<{ video_track: string }>(
-      `/api/projects/${slug}/clips/loop`,
-      {
-        method: "POST",
-        body: JSON.stringify({ duration_min: durationMin ?? null, force }),
-      },
-    ),
-
-  // ---- audio ----
-  generateAudio: (
-    slug: string,
-    opts: {
-      silent?: boolean;
-      stock?: boolean;
-      no_music?: boolean;
-      skip_sfx?: boolean;
-      sfx_variations?: number;
-      music_variations?: number;
-      force?: boolean;
-    } = {},
-  ) =>
-    request<{ audio_track: string; preview: string }>(
-      `/api/projects/${slug}/audio`,
-      { method: "POST", body: JSON.stringify(opts) },
-    ),
-  // ---- sfx / music variations ----
-  getSfx: (slug: string) => request<SfxState>(`/api/projects/${slug}/sfx`),
-  generateSfx: (slug: string, variations = 3) =>
-    request<JobStartedResponse>(`/api/projects/${slug}/sfx/generate`, {
-      method: "POST",
-      body: JSON.stringify({ variations }),
-    }),
-  getMusic: (slug: string) => request<MusicState>(`/api/projects/${slug}/music`),
-  generateMusic: (slug: string, variations = 3) =>
+  // ---- music step ----
+  musicGenerate: (slug: string, prompt: string) =>
     request<JobStartedResponse>(`/api/projects/${slug}/music/generate`, {
       method: "POST",
-      body: JSON.stringify({ variations }),
+      body: JSON.stringify({ prompt }),
     }),
+  musicSelect: (slug: string, attemptId: string) =>
+    request<Attempt>(`/api/projects/${slug}/music/select/${attemptId}`, { method: "POST" }),
+  musicSkip: (slug: string) =>
+    request<StudioProject>(`/api/projects/${slug}/music/skip`, { method: "POST" }),
+  musicConfirm: (slug: string) =>
+    request<StudioProject>(`/api/projects/${slug}/music/confirm`, { method: "POST" }),
+  musicUnconfirm: (slug: string) =>
+    request<StudioProject>(`/api/projects/${slug}/music/unconfirm`, { method: "POST" }),
 
-  regenSfx: (slug: string, layerName: string, prompt?: string, variations = 3) =>
-    request<{ status: string }>(
-      `/api/projects/${slug}/sfx/${encodeURIComponent(layerName)}/regen`,
-      {
-        method: "POST",
-        body: JSON.stringify({ prompt: prompt ?? null, variations }),
-      },
-    ),
-  pickSfx: (slug: string, layerName: string, variation: string) =>
-    request<{ status: string }>(
-      `/api/projects/${slug}/sfx/${encodeURIComponent(layerName)}/pick`,
-      { method: "POST", body: JSON.stringify({ variation }) },
-    ),
-  pickMusic: (slug: string, variation: string) =>
-    request<{ status: string }>(`/api/projects/${slug}/music/pick`, {
-      method: "POST",
-      body: JSON.stringify({ variation }),
-    }),
-  runMux: (slug: string, force = false) =>
-    request<{ final: string }>(`/api/projects/${slug}/mux`, {
-      method: "POST",
-      body: JSON.stringify({ force }),
-    }),
-
-  // ---- mix ----
-  getMix: (slug: string) => request<MixConfig>(`/api/projects/${slug}/mix`),
-  lockMix: (slug: string, mix: MixConfig) =>
-    request<MixConfig>(`/api/projects/${slug}/mix`, {
-      method: "PUT",
-      body: JSON.stringify(mix),
-    }),
-  mixPreview: (
+  // ---- mix step ----
+  mixUpdate: (
     slug: string,
     layerGains: Record<string, number>,
-    disabledLayers: string[] = [],
-    durationS = 60,
+    disabledLayers: string[],
+    previewDurationS?: number,
   ) =>
-    request<{ preview: string }>(`/api/projects/${slug}/mix/preview`, {
-      method: "POST",
+    request<StudioProject>(`/api/projects/${slug}/mix`, {
+      method: "PUT",
       body: JSON.stringify({
         layer_gains: layerGains,
         disabled_layers: disabledLayers,
-        duration_s: durationS,
+        preview_duration_s: previewDurationS ?? null,
       }),
     }),
-
-  // ---- render / variants ----
-  render: (
-    slug: string,
-    req: { variant: string; duration_min: number; audio_mode?: string; force?: boolean },
-  ) =>
-    request<JobStartedResponse>(`/api/projects/${slug}/render`, {
+  mixPreview: (slug: string, durationS: number) =>
+    request<JobStartedResponse>(`/api/projects/${slug}/mix/preview`, {
       method: "POST",
-      body: JSON.stringify(req),
+      body: JSON.stringify({ duration_s: durationS }),
     }),
-  listVariants: (slug: string) =>
-    request<FinalVariants>(`/api/projects/${slug}/variants`),
+  mixConfirm: (slug: string) =>
+    request<StudioProject>(`/api/projects/${slug}/mix/confirm`, { method: "POST" }),
+  mixUnconfirm: (slug: string) =>
+    request<StudioProject>(`/api/projects/${slug}/mix/unconfirm`, { method: "POST" }),
 
-  // ---- cost ----
-  getCost: (slug: string) =>
-    request<CostSummary>(`/api/projects/${slug}/cost`),
+  // ---- final step ----
+  finalUpdate: (slug: string, durationMin: number) =>
+    request<StudioProject>(`/api/projects/${slug}/final`, {
+      method: "PUT",
+      body: JSON.stringify({ duration_min: durationMin }),
+    }),
+  finalRender: (slug: string, durationMin: number) =>
+    request<JobStartedResponse>(`/api/projects/${slug}/final/render`, {
+      method: "POST",
+      body: JSON.stringify({ duration_min: durationMin }),
+    }),
+  finalComplete: (slug: string) =>
+    request<StudioProject>(`/api/projects/${slug}/final/complete`, { method: "POST" }),
 };
