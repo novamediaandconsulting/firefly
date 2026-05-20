@@ -1,17 +1,27 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Manrope, Cormorant_Garamond, Geist_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { Providers } from "./providers";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+// Body font — geometric humanist, designer-favorite.
+const manrope = Manrope({
+  variable: "--font-sans",
   subsets: ["latin"],
+  weight: ["300", "400", "500", "600", "700"],
 });
 
+// Heading + brand font — high-contrast classic serif (editorial/luxe).
+const cormorant = Cormorant_Garamond({
+  variable: "--font-serif",
+  subsets: ["latin"],
+  weight: ["300", "400", "500", "600", "700"],
+});
+
+// Mono — kept for code/cost badges; pairs cleanly without competing.
 const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+  variable: "--font-mono",
   subsets: ["latin"],
 });
 
@@ -28,7 +38,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${manrope.variable} ${cormorant.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-background text-foreground">
         <Providers>
@@ -36,7 +46,7 @@ export default function RootLayout({
             <div className="mx-auto max-w-6xl px-6 py-5 flex items-center justify-between">
               <Link
                 href="/"
-                className="flex items-center gap-2.5 text-xl font-extrabold tracking-tight hover:opacity-80 transition-opacity"
+                className="font-serif flex items-center gap-2.5 text-2xl font-medium tracking-tight hover:opacity-80 transition-opacity"
               >
                 <span className="inline-block w-3 h-3 rounded-full bg-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.6)]" />
                 Firefly Studio
