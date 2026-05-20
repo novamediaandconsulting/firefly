@@ -123,6 +123,17 @@ The shared `StudioShell` component (`web/components/studio-shell.tsx`)
 renders the step ruler, project title, step + total cost badges, job badge,
 and Back/Continue footer.
 
+**Per-step UX details worth knowing:**
+
+- **Clip step** displays the `motion_prompts` list captured in the active
+  clip's `config` directly below the video. Without this users have no
+  way to verify whether a newly-added prompt was actually factored into
+  the generation. Lifted from `attempt.config.motion_prompts`, which the
+  job worker fills before saving.
+- **Mix step** has both real-time client-side playback (Web Audio) **and**
+  a "Render exact preview" button. The mix the final render will use is
+  the server-rendered one; the real-time playback is for fast iteration.
+
 ## Real-time mix (Web Audio)
 
 `web/app/projects/[slug]/studio/mix/page.tsx`:
@@ -137,15 +148,49 @@ and Back/Continue footer.
 - Local mix state debounce-saves to the server (`PUT /mix`) every 500ms so
   refresh / continue keeps the latest gains.
 
-## Provider notes (unchanged from v1, still load-bearing)
+## Typography
+
+- **Body**: Manrope (300/400/500/600/700) via `next/font/google` → CSS var
+  `--font-sans`. Geometric humanist, designer-favorite. Base 16px.
+- **Headings + brand wordmark**: Cormorant Garamond (300/400/500/600/700)
+  → `--font-serif`. High-contrast classic serif; h1 stays at weight 400
+  because it's display-sized; h2-h4 at 500 for screen legibility.
+  `font-serif` utility class is wired through `@theme inline` so any
+  shadcn component reading `--font-heading` picks it up automatically.
+- **Mono**: Geist Mono → `--font-mono`. Pairs cleanly with the serif/sans
+  combo without competing for character. Used for badges, costs, model
+  names, monospaced metadata.
+- Wired in `web/app/layout.tsx`; theme variables in `web/app/globals.css`.
+
+## Provider notes (load-bearing operational details)
 
 ### fal.ai — images, video, music
 
 - One key (`FAL_KEY`) covers everything.
+- **`fal_client.subscribe` kwarg is `client_timeout`, NOT `timeout`** —
+  the obvious-sounding name silently raises `TypeError: unexpected
+  keyword argument` at runtime. There's also `start_timeout` (how long
+  to wait for the request to even start). Our defaults:
+  - music: `client_timeout=180.0`  (CassetteAI/Beatoven typical: <15s)
+  - image: `client_timeout=180.0`  (Flux Pro typical: 10-20s)
+  - clip:  `client_timeout=480.0`  (Kling typical: 60-90s; chained 30s
+    worst-case is 3-4 min)
+  Without these, a stuck queue at fal hangs the worker thread forever
+  and only the wizard's "cancel" button can rescue it.
 - **Kling caps at 15s natively.** Studio's 16–30s clips chain two Kling
   calls: segment 1 runs from the chosen image; ffmpeg extracts segment 1's
   last frame; segment 2 starts from that frame; ffmpeg concats. Motion can
   stutter at the seam; that's a known limitation.
+- **Music model is selectable per project** between two fal-hosted
+  options:
+  - `cassetteai/music-generator` — fast (~15s for 3-min track), bright
+  - `beatoven/music-generation` — tuned for ambient
+  Allowlist enforced server-side in `studio.py` (`MUSIC_MODELS`). UI
+  exposes a radio on the music step that calls `PUT /music/config`.
+  **Caveat**: both run on fal's compute backend; when fal's music queue
+  stalls (observed 2026-05-19), both models stall together. The radio
+  doesn't route around fal — switching is only useful when one specific
+  model is failing while fal's queue is otherwise healthy.
 - Image model path may drift; if a generation 404s, search fal's model
   directory and patch `StudioConfig.image_model`.
 - Always pass `generate_audio: false` to Kling — we layer audio ourselves.
@@ -155,6 +200,9 @@ and Back/Continue footer.
 - Endpoint: `POST /v1/sound-generation`. Cap is **30s** per call.
 - `loop: true` for seamless ambient — always use it.
 - Restricted API keys only need the **Sound Effects** endpoint enabled.
+- Future: ElevenLabs also has a Music Generation endpoint that would
+  give us a non-fal music fallback. Not wired yet; would require the
+  user to enable "Music Generation" on their restricted API key.
 
 ### Claude — not used in Studio
 
@@ -253,3 +301,19 @@ and for backward-compat reading by `StudioStore._migrate_from_legacy`.
   attempts list so legacy assets play back through the new UI.
 - **Slug auto-suffix on collision**: avoids rejecting the user with an
   error; the live preview shows the final slug.
+- **Cormorant Garamond + Manrope + Geist Mono**: serif/sans pairing for
+  an editorial/luxe feel; replaces the v1 Geist baseline. h1 uses serif
+  weight 400 because display size carries it; everything else 500.
+- **Music model radio (CassetteAI vs Beatoven)**: per-project choice,
+  persisted in `project.config.music_model`. Added after observing
+  CassetteAI's fal queue stall — though in practice the radio only helps
+  when one model is selectively failing; both share fal's compute.
+- **fal_client timeouts (`client_timeout`)**: set explicit bounds on
+  every fal.subscribe call so a stuck queue raises an error instead of
+  hanging the worker thread indefinitely. The kwarg name is non-obvious
+  (`client_timeout`, not `timeout`) — getting it wrong fails at runtime
+  with `TypeError` instead of being a silent no-op.
+- **Clip step shows motion_prompts used**: visibility fix — the
+  pipeline already includes every non-empty prompt, but the UI didn't
+  surface which prompts produced the active clip, so users couldn't
+  confirm a freshly-added prompt landed.
