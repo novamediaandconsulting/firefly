@@ -35,7 +35,7 @@ def generate_image(
         args["seed"] = seed
     # Flux Pro v1.1 typically returns in 10-20s; 3 min is a generous ceiling
     # so a stuck queue at fal raises instead of hanging the worker forever.
-    result = fal_client.subscribe(model, arguments=args, with_logs=False, timeout=180.0)
+    result = fal_client.subscribe(model, arguments=args, with_logs=False, client_timeout=180.0)
     images = result.get("images") or []
     if not images:
         raise RuntimeError(f"fal {model} returned no images: {result!r}")
@@ -79,7 +79,7 @@ def generate_clip(
     }
     # Kling v3 pro: ~6× duration empirically, so a 15s clip = ~90s wall time.
     # 8 min ceiling covers worst-case 30s chained pair generation slow path.
-    result = fal_client.subscribe(model, arguments=args, with_logs=False, timeout=480.0)
+    result = fal_client.subscribe(model, arguments=args, with_logs=False, client_timeout=480.0)
     video = result.get("video")
     if not video or "url" not in video:
         raise RuntimeError(f"fal {model} returned no video: {result!r}")
