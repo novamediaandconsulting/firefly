@@ -247,13 +247,37 @@ export default function ClipStepPage({
               )}
             </div>
             {activeAttempt && (
-              <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
-                <span className="font-mono">
-                  {activeAttempt.id} · {(activeAttempt.config as { duration_s?: number }).duration_s}s
-                  {(activeAttempt.config as { chained?: boolean }).chained && " (chained)"}
-                </span>
-                <span>{new Date(activeAttempt.created_at).toLocaleString()}</span>
-              </div>
+              <>
+                <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
+                  <span className="font-mono">
+                    {activeAttempt.id} · {(activeAttempt.config as { duration_s?: number }).duration_s}s
+                    {(activeAttempt.config as { chained?: boolean }).chained && " (chained)"}
+                  </span>
+                  <span>{new Date(activeAttempt.created_at).toLocaleString()}</span>
+                </div>
+                {(() => {
+                  const used = (activeAttempt.config as { motion_prompts?: string[] }).motion_prompts ?? [];
+                  if (used.length === 0) return null;
+                  return (
+                    <div className="border-t pt-3 px-1 space-y-2">
+                      <div className="text-xs font-semibold text-muted-foreground">
+                        Generated from {used.length} motion prompt{used.length === 1 ? "" : "s"}:
+                      </div>
+                      <ul className="space-y-1.5">
+                        {used.map((p, i) => (
+                          <li
+                            key={i}
+                            className="text-xs leading-relaxed bg-muted/40 rounded px-2.5 py-1.5"
+                          >
+                            <span className="text-muted-foreground font-mono mr-1.5">{i + 1}.</span>
+                            {p}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                })()}
+              </>
             )}
           </CardContent>
         </Card>
