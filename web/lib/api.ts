@@ -137,6 +137,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ prompt }),
     }),
+  musicSetModel: (slug: string, model: string) =>
+    request<StudioProject>(`/api/projects/${slug}/music/config`, {
+      method: "PUT",
+      body: JSON.stringify({ model }),
+    }),
   musicSelect: (slug: string, attemptId: string) =>
     request<Attempt>(`/api/projects/${slug}/music/select/${attemptId}`, { method: "POST" }),
   musicSkip: (slug: string) =>

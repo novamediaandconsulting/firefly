@@ -370,6 +370,29 @@ def sfx_unconfirm(slug: str) -> StudioProject:
 # =============================================================================
 
 
+MUSIC_MODELS = {
+    "cassetteai/music-generator",
+    "beatoven/music-generation",
+}
+
+
+class MusicConfigRequest(BaseModel):
+    model: str
+
+
+@router.put("/{slug}/music/config", response_model=StudioProject)
+def music_config(slug: str, req: MusicConfigRequest) -> StudioProject:
+    if req.model not in MUSIC_MODELS:
+        raise HTTPException(
+            400,
+            f"unsupported music model: {req.model} (allowed: {sorted(MUSIC_MODELS)})",
+        )
+    store, project = load_studio_project(slug)
+    project.config.music_model = req.model
+    store.save(project)
+    return project
+
+
 class MusicGenerateRequest(BaseModel):
     prompt: str
 

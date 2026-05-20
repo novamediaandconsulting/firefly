@@ -57,6 +57,14 @@ export default function MusicStepPage({
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const setModel = useMutation({
+    mutationFn: (model: string) => api.musicSetModel(slug, model),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["project", slug] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const skip = useMutation({
     mutationFn: () => api.musicSkip(slug),
     onSuccess: () => {
@@ -135,6 +143,33 @@ export default function MusicStepPage({
       <Card>
         <CardContent className="py-6 space-y-4">
           <div className="space-y-2">
+            <Label>Music model</Label>
+            <div className="flex gap-2">
+              {[
+                { id: "cassetteai/music-generator", label: "CassetteAI", hint: "fast (~15s), bright" },
+                { id: "beatoven/music-generation",  label: "Beatoven",   hint: "tuned for ambient" },
+              ].map((m) => {
+                const active = (project.config.music_model || "cassetteai/music-generator") === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setModel.mutate(m.id)}
+                    disabled={setModel.isPending}
+                    className={`flex-1 rounded-lg border-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+                      active
+                        ? "border-amber-500 bg-amber-50 dark:bg-amber-950/30 text-foreground"
+                        : "border-border hover:border-foreground/30 text-muted-foreground"
+                    }`}
+                  >
+                    <div className="font-semibold">{m.label}</div>
+                    <div className="text-xs font-normal opacity-70">{m.hint}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="space-y-2">
             <Label htmlFor="prompt">Music mood</Label>
             <Textarea
               id="prompt"
@@ -144,7 +179,8 @@ export default function MusicStepPage({
               placeholder="Soft ambient piano with warm reverb, calm peaceful morning mood, slow tempo, no drums, no vocals"
             />
             <p className="text-xs text-muted-foreground">
-              ~$0.06 per generation (3 min, looped to fill the video). CassetteAI model.
+              ~$0.06 per generation (3 min, looped to fill the video). Current model:{" "}
+              <code className="font-mono">{project.config.music_model || "cassetteai/music-generator"}</code>.
             </p>
             {project.music.skipped && (
               <p className="text-xs text-amber-600">
