@@ -32,7 +32,11 @@ def generate_music(
     """
     _ensure_key()
     args = {"prompt": prompt, "duration": int(duration_s)}
-    result = fal_client.subscribe(model, arguments=args, with_logs=False)
+    # CassetteAI normally completes in <15s. 3-minute ceiling so a stuck
+    # queue job at fal raises FalClientHTTPError instead of hanging the
+    # worker forever; the user can then see the error in the wizard badge
+    # and click Generate again rather than wondering what's happening.
+    result = fal_client.subscribe(model, arguments=args, with_logs=False, timeout=180.0)
     audio = result.get("audio_file")
     if not audio or "url" not in audio:
         raise RuntimeError(f"fal {model} returned no audio: {result!r}")
