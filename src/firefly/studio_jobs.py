@@ -113,6 +113,10 @@ def generate_image(slug: str, prompt: str, resolution: str) -> Attempt:
     # Update the live prompt + resolution to whatever was just used.
     project.image.prompt = prompt
     project.image.resolution = resolution
+    # Auto-select the new attempt so it's the canonical choice; the user can
+    # override later by clicking a prior attempt in the history strip.
+    project.image.chosen_attempt_id = attempt_id
+    shutil.copy(target_file, store.selected_image_path())
     store.save(project)
     return attempt
 
@@ -238,6 +242,10 @@ def generate_clip(slug: str, motion_prompts: list[str], duration_s: int) -> Atte
     project.clip.attempts.append(attempt)
     project.clip.motion_prompts = motion_prompts
     project.clip.duration_s = duration_s
+    # Auto-select the new clip so it flows through to the mix + final render
+    # without an extra explicit Pick click.
+    project.clip.chosen_attempt_id = attempt_id
+    shutil.copy(target_file, store.selected_clip_path())
     store.save(project)
     return attempt
 
@@ -280,6 +288,9 @@ def generate_sfx(slug: str, layer_id: str, title: str, prompt: str, gain_db: flo
     )
     _write_meta(target_file, attempt)
     layer.attempts.append(attempt)
+    # Auto-select so the layer flows into the mix without a separate Pick.
+    layer.chosen_attempt_id = attempt_id
+    shutil.copy(target_file, store.selected_sfx_path(layer.layer_id))
     store.save(project)
     return attempt
 
@@ -321,6 +332,9 @@ def generate_music(slug: str, prompt: str) -> Attempt:
     project.music.attempts.append(attempt)
     project.music.prompt = prompt
     project.music.skipped = False
+    # Auto-select so the music bed flows into the mix without a separate Pick.
+    project.music.chosen_attempt_id = attempt_id
+    shutil.copy(target_file, store.selected_music_path())
     store.save(project)
     return attempt
 

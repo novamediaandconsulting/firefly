@@ -40,23 +40,29 @@ export default function MixStepPage({
   });
   const project = projectQ.data;
 
-  // Build the mix layers — music (if present) + each non-deleted, chosen SFX.
+  // Build the mix layers — music (if present) + each non-deleted SFX layer
+  // that has any attempt. Falls back to the latest attempt if chosen_attempt_id
+  // is null (defensive: covers layers generated before auto-select landed).
   const mixLayers: MixLayer[] = useMemo(() => {
     if (!project) return [];
     const list: MixLayer[] = [];
-    if (!project.music.skipped && project.music.chosen_attempt_id) {
-      const a = project.music.attempts.find((x) => x.id === project.music.chosen_attempt_id);
-      if (a) list.push({
-        key: MUSIC_KEY, title: "Music bed",
+    if (!project.music.skipped && project.music.attempts.length > 0) {
+      const a =
+        project.music.attempts.find((x) => x.id === project.music.chosen_attempt_id) ??
+        project.music.attempts.at(-1)!;
+      list.push({
+        key: MUSIC_KEY,
+        title: "Music bed",
         url: projectFileUrl(slug, a.filename),
         defaultGain: 0.0,
       });
     }
     for (const layer of project.sfx.layers) {
       if (layer.deleted) continue;
-      if (!layer.chosen_attempt_id) continue;
-      const a = layer.attempts.find((x) => x.id === layer.chosen_attempt_id);
-      if (!a) continue;
+      if (layer.attempts.length === 0) continue;
+      const a =
+        layer.attempts.find((x) => x.id === layer.chosen_attempt_id) ??
+        layer.attempts.at(-1)!;
       list.push({
         key: layer.layer_id,
         title: layer.title,
@@ -94,7 +100,8 @@ export default function MixStepPage({
   const [isPlaying, setIsPlaying] = useState(false);
   const [loadingBuffers, setLoadingBuffers] = useState(false);
 
-  // Preload buffers when mix layers change.
+  // Preload buffers when mix layers change. Promise.allSettled so a single
+  // bad/missing file doesn't take down playback for every other layer.
   useEffect(() => {
     if (mixLayers.length === 0) return;
     if (!ctxRef.current) {
@@ -103,17 +110,28 @@ export default function MixStepPage({
       ctxRef.current = new Ctx();
     }
     setLoadingBuffers(true);
-    Promise.all(
-      mixLayers
-        .filter((l) => !buffersRef.current.has(l.url))
-        .map(async (l) => {
-          const resp = await fetch(l.url);
-          const arr = await resp.arrayBuffer();
-          const buf = await ctxRef.current!.decodeAudioData(arr);
-          buffersRef.current.set(l.url, buf);
-        }),
+    const toLoad = mixLayers.filter((l) => !buffersRef.current.has(l.url));
+    Promise.allSettled(
+      toLoad.map(async (l) => {
+        const resp = await fetch(l.url);
+        if (!resp.ok) {
+          throw new Error(`${resp.status} ${resp.statusText} fetching ${l.url}`);
+        }
+        const arr = await resp.arrayBuffer();
+        const buf = await ctxRef.current!.decodeAudioData(arr);
+        buffersRef.current.set(l.url, buf);
+        return l.title;
+      }),
     )
-      .catch((e) => toast.error(`audio load failed: ${(e as Error).message}`))
+      .then((results) => {
+        results.forEach((r, i) => {
+          if (r.status === "rejected") {
+            const layer = toLoad[i];
+            console.error(`audio load failed for ${layer.title}:`, r.reason);
+            toast.error(`Couldn't load "${layer.title}": ${(r.reason as Error).message}`);
+          }
+        });
+      })
       .finally(() => setLoadingBuffers(false));
   }, [mixLayers]);
 
