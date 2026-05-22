@@ -59,6 +59,27 @@ def _resize_image(src: Path, dst: Path, target: str) -> None:
     ])
 
 
+def _kling_input_image(src: Path, tmp_dir: Path) -> Path:
+    """Produce a Kling-safe input image (~1080p JPEG, well under 10 MiB).
+
+    Kling's image-to-video endpoint rejects images larger than 10 MiB; a 4K
+    PNG comfortably exceeds that. Downscaling to 1920×1080 and re-encoding as
+    high-quality JPEG keeps the input safe without affecting Kling's output
+    quality (Kling renders at its own resolution anyway).
+    """
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    out = tmp_dir / f"kling_input_{int(datetime.utcnow().timestamp())}.jpg"
+    ff.run([
+        "ffmpeg", "-y", "-nostats", "-loglevel", "warning",
+        "-i", str(src),
+        "-vf", "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease",
+        "-q:v", "3",   # ffmpeg JPEG quality scale (2-5 ≈ 90-95%); 3 is ~92%
+        "-frames:v", "1",
+        str(out),
+    ])
+    return out
+
+
 def _write_meta(attempt_file: Path, attempt: Attempt) -> None:
     meta = {
         "id": attempt.id,
@@ -214,7 +235,9 @@ def generate_clip(slug: str, motion_prompts: list[str], duration_s: int) -> Atte
 
     total_cost = 0.0
     if duration_s <= 15:
-        image_url = fal.upload_image(image_path)
+        kling_in = _kling_input_image(image_path, target_dir)
+        image_url = fal.upload_image(kling_in)
+        kling_in.unlink(missing_ok=True)
         mp4, _meta = fal.generate_clip(
             image_url, prompt,
             model=project.config.video_model,
@@ -233,10 +256,12 @@ def generate_clip(slug: str, motion_prompts: list[str], duration_s: int) -> Atte
         seg2_dur = duration_s - 15
         seg1 = target_dir / f"{attempt_id}.seg1.mp4"
         seg2 = target_dir / f"{attempt_id}.seg2.mp4"
-        last_frame = target_dir / f"{attempt_id}.lastframe.png"
+        last_frame = target_dir / f"{attempt_id}.lastframe.jpg"
 
-        # Segment 1 — from chosen image
-        image_url = fal.upload_image(image_path)
+        # Segment 1 — from chosen image (downscaled to Kling-safe input)
+        kling_in = _kling_input_image(image_path, target_dir)
+        image_url = fal.upload_image(kling_in)
+        kling_in.unlink(missing_ok=True)
         mp4, _ = fal.generate_clip(
             image_url, prompt,
             model=project.config.video_model,
@@ -250,12 +275,12 @@ def generate_clip(slug: str, motion_prompts: list[str], duration_s: int) -> Atte
         )
         total_cost += e1.cost_usd
 
-        # Extract last frame of seg1
+        # Extract last frame of seg1 as a Kling-safe JPEG directly.
         ff.run([
             "ffmpeg", "-y", "-nostats", "-loglevel", "warning",
             "-sseof", "-0.1", "-i", str(seg1),
-            "-vsync", "0", "-q:v", "2",
-            "-frames:v", "1", str(last_frame),
+            "-vf", "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease",
+            "-q:v", "3", "-frames:v", "1", str(last_frame),
         ])
 
         # Segment 2 — from last frame of seg1
