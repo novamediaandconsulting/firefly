@@ -526,21 +526,26 @@ def skip_music(slug: str) -> StudioProject:
 
 
 def _build_mix_layers(project: StudioProject, store: StudioStore) -> list[tuple[Path, float]]:
-    """Return list of (file_path, gain_db) tuples to feed into ff.mix_audio."""
+    """Return list of (file_path, gain_db) tuples to feed into ff.mix_audio.
+
+    Defensive: if a layer has attempts but no chosen_attempt_id (pre-auto-
+    select projects), fall back to the latest attempt rather than silently
+    dropping it. Matches the frontend mix board's fallback.
+    """
     from .schemas import MUSIC_GAIN_KEY
     layers: list[tuple[Path, float]] = []
     disabled = set(project.mix.disabled_layers)
 
     # Music
-    if (
-        not project.music.skipped
-        and project.music.chosen_attempt_id
-        and MUSIC_GAIN_KEY not in disabled
-    ):
-        music_attempt = next(
-            (a for a in project.music.attempts if a.id == project.music.chosen_attempt_id),
-            None,
-        )
+    if not project.music.skipped and MUSIC_GAIN_KEY not in disabled:
+        music_attempt = None
+        if project.music.chosen_attempt_id:
+            music_attempt = next(
+                (a for a in project.music.attempts if a.id == project.music.chosen_attempt_id),
+                None,
+            )
+        if music_attempt is None and project.music.attempts:
+            music_attempt = project.music.attempts[-1]
         if music_attempt:
             gain = project.mix.layer_gains.get(MUSIC_GAIN_KEY, 0.0)
             layers.append((store.root / music_attempt.filename, gain))
@@ -549,15 +554,18 @@ def _build_mix_layers(project: StudioProject, store: StudioStore) -> list[tuple[
     for layer in project.sfx.layers:
         if layer.deleted or not layer.enabled_in_mix or layer.layer_id in disabled:
             continue
-        if not layer.chosen_attempt_id:
+        if not layer.attempts:
             continue
-        sfx_attempt = next(
-            (a for a in layer.attempts if a.id == layer.chosen_attempt_id),
-            None,
-        )
-        if sfx_attempt:
-            gain = project.mix.layer_gains.get(layer.layer_id, layer.gain_db)
-            layers.append((store.root / sfx_attempt.filename, gain))
+        sfx_attempt = None
+        if layer.chosen_attempt_id:
+            sfx_attempt = next(
+                (a for a in layer.attempts if a.id == layer.chosen_attempt_id),
+                None,
+            )
+        if sfx_attempt is None:
+            sfx_attempt = layer.attempts[-1]
+        gain = project.mix.layer_gains.get(layer.layer_id, layer.gain_db)
+        layers.append((store.root / sfx_attempt.filename, gain))
 
     return layers
 
