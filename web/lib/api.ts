@@ -76,6 +76,30 @@ export const api = {
     }),
   imageSelect: (slug: string, attemptId: string) =>
     request<Attempt>(`/api/projects/${slug}/image/select/${attemptId}`, { method: "POST" }),
+  imageUpload: async (slug: string, file: File): Promise<{ ref_path: string; bytes: number }> => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${API_BASE}/api/projects/${slug}/image/upload`, {
+      method: "POST",
+      body: form,
+    });
+    if (!res.ok) {
+      let detail: string;
+      try {
+        const body = await res.json();
+        detail = body.detail ?? res.statusText;
+      } catch {
+        detail = res.statusText;
+      }
+      throw new Error(detail);
+    }
+    return res.json();
+  },
+  imageRemix: (slug: string, refPath: string, prompt: string, resolution: string) =>
+    request<JobStartedResponse>(`/api/projects/${slug}/image/remix`, {
+      method: "POST",
+      body: JSON.stringify({ ref_path: refPath, prompt, resolution }),
+    }),
   imageConfirm: (slug: string) =>
     request<StudioProject>(`/api/projects/${slug}/image/confirm`, { method: "POST" }),
   imageUnconfirm: (slug: string) =>

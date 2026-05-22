@@ -112,6 +112,7 @@ class FinalStep(BaseModel):
 
 class StudioConfig(BaseModel):
     image_model: str = "fal-ai/flux-pro/v1.1"
+    image_edit_model: str = "fal-ai/flux-pro/kontext"  # img-to-img with text guidance (Remix tab)
     video_model: str = "fal-ai/kling-video/v3/pro/image-to-video"
     music_model: str = "cassetteai/music-generator"
     music_duration_s: int = 180
@@ -190,6 +191,10 @@ class StudioStore:
     @property
     def attempts_dir(self) -> Path:
         return self.root / "attempts"
+
+    @property
+    def uploads_dir(self) -> Path:
+        return self.root / "uploads"
 
     def attempt_dir(self, step: str, sublayer: str | None = None) -> Path:
         p = self.attempts_dir / step

@@ -12,7 +12,8 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from datetime import datetime as _dt
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from ... import costs as costs_mod
@@ -201,6 +202,67 @@ def image_generate(slug: str, req: ImageGenerateRequest) -> dict:
 @router.post("/{slug}/image/select/{attempt_id}", response_model=Attempt)
 def image_select(slug: str, attempt_id: str) -> Attempt:
     return studio_jobs.select_image(slug, attempt_id)
+
+
+class ImageUploadResponse(BaseModel):
+    ref_path: str   # relative to project root, suitable for the remix endpoint
+    bytes: int
+
+
+@router.post("/{slug}/image/upload", response_model=ImageUploadResponse)
+async def image_upload(slug: str, file: UploadFile = File(...)) -> ImageUploadResponse:
+    """Receive an uploaded reference image; persist under projects/<slug>/uploads/.
+
+    The returned ref_path can then be passed to /image/remix as many times as
+    you like (iterate on the prompt without re-uploading).
+    """
+    store = load_studio(slug)
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(400, "empty upload")
+    if len(contents) > 25 * 1024 * 1024:
+        raise HTTPException(400, "upload too large (>25 MB)")
+    # Sniff a reasonable extension from the upload name; default png.
+    name = (file.filename or "").lower()
+    ext = ".png"
+    for candidate in (".png", ".jpg", ".jpeg", ".webp"):
+        if name.endswith(candidate):
+            ext = ".jpg" if candidate == ".jpeg" else candidate
+            break
+    store.uploads_dir.mkdir(parents=True, exist_ok=True)
+    ts = int(_dt.utcnow().timestamp())
+    out = store.uploads_dir / f"ref_{ts}{ext}"
+    n = 2
+    while out.exists():
+        out = store.uploads_dir / f"ref_{ts}-{n}{ext}"
+        n += 1
+    out.write_bytes(contents)
+    return ImageUploadResponse(
+        ref_path=str(out.relative_to(store.root)),
+        bytes=len(contents),
+    )
+
+
+class ImageRemixRequest(BaseModel):
+    ref_path: str
+    prompt: str
+    resolution: str = "1080p"
+
+
+@router.post("/{slug}/image/remix", status_code=202)
+def image_remix(slug: str, req: ImageRemixRequest) -> dict:
+    """Kick off Flux Kontext on an uploaded reference + prompt."""
+    store = load_studio(slug)
+    if not (store.root / req.ref_path).exists():
+        raise HTTPException(404, f"reference not found: {req.ref_path}")
+    job = start_job(
+        _legacy_proxy(store), stage="image",
+        message=f"remixing upload @ {req.resolution}",
+        fn=lambda: studio_jobs.generate_image_remix(
+            slug, req.ref_path, req.prompt, req.resolution,
+        ),
+    )
+    return {"status": "started", "job": job.model_dump(mode="json")}
 
 
 @router.post("/{slug}/image/confirm", response_model=StudioProject)

@@ -121,6 +121,71 @@ def generate_image(slug: str, prompt: str, resolution: str) -> Attempt:
     return attempt
 
 
+def generate_image_remix(
+    slug: str,
+    ref_filename: str,
+    prompt: str,
+    resolution: str,
+) -> Attempt:
+    """Generate a new image by remixing an uploaded reference + text prompt.
+
+    The uploaded reference is read from projects/<slug>/<ref_filename>, posted
+    to fal via fal.upload_image, then Flux Kontext runs the edit. Result is
+    saved as a normal image attempt (attempts/image/vN.png) so it slots into
+    the same history strip as text-to-image generations.
+    """
+    store = StudioStore(slug)
+    project = store.load()
+
+    ref_path = store.root / ref_filename
+    if not ref_path.exists():
+        raise RuntimeError(f"reference image not found at {ref_path}")
+
+    attempt_id = next_attempt_id(project.image.attempts)
+    target_dir = store.attempt_dir("image")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_file = target_dir / f"{attempt_id}.png"
+
+    # Upload reference to fal, then call Kontext.
+    image_url = fal.upload_image(ref_path)
+    png, meta = fal.generate_image_remix(
+        image_url, prompt, model=project.config.image_edit_model,
+    )
+    raw_path = target_dir / f"{attempt_id}.raw.png"
+    raw_path.write_bytes(png)
+    _resize_image(raw_path, target_file, resolution)
+    raw_path.unlink(missing_ok=True)
+
+    entry = costs_mod.record(
+        _legacy_proxy(store),
+        provider="fal", model=project.config.image_edit_model,
+        stage="image", artifact_id=attempt_id, units=1.0,
+    )
+
+    attempt = Attempt(
+        id=attempt_id,
+        filename=str(target_file.relative_to(store.root)),
+        prompt=prompt,
+        config={
+            "kind": "remix",
+            "resolution": resolution,
+            "reference": ref_filename,
+            "seed": meta.get("seed"),
+        },
+        created_at=datetime.utcnow(),
+        cost_usd=entry.cost_usd,
+    )
+    _write_meta(target_file, attempt)
+    project.image.attempts.append(attempt)
+    project.image.prompt = prompt
+    project.image.resolution = resolution
+    # Auto-select the new remix so it flows into clip step naturally.
+    project.image.chosen_attempt_id = attempt_id
+    shutil.copy(target_file, store.selected_image_path())
+    store.save(project)
+    return attempt
+
+
 # ---- CLIP -------------------------------------------------------------------
 
 

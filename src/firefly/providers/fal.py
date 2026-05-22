@@ -50,6 +50,32 @@ def upload_image(path: Path) -> str:
     return fal_client.upload_file(str(path))
 
 
+def generate_image_remix(
+    image_url: str,
+    prompt: str,
+    *,
+    model: str = "fal-ai/flux-pro/kontext",
+) -> tuple[bytes, dict]:
+    """Image-to-image with text guidance — 'here's a picture, change it like so'.
+
+    Returns (png_bytes, metadata). Caller is responsible for resizing.
+    """
+    _ensure_key()
+    args = {
+        "prompt": prompt,
+        "image_url": image_url,
+        "output_format": "png",
+        "safety_tolerance": "2",
+    }
+    result = fal_client.subscribe(model, arguments=args, with_logs=False, client_timeout=240.0)
+    images = result.get("images") or []
+    if not images:
+        raise RuntimeError(f"fal {model} returned no images: {result!r}")
+    url = images[0]["url"]
+    png = httpx.get(url, timeout=120).content
+    return png, {"seed": result.get("seed"), "url": url}
+
+
 def generate_clip(
     image_url: str,
     prompt: str,
