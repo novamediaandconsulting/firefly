@@ -20,6 +20,9 @@ function todayStamp(): string {
   return `${y}${m}${day}`;
 }
 
+// Loop xfade dropdown options — must stay in sync with clip/page.tsx.
+const XFADE_OPTIONS = Array.from({ length: 19 }, (_, i) => 1.0 + i * 0.5);
+
 export default function FinalStepPage({
   params,
 }: {
@@ -39,18 +42,34 @@ export default function FinalStepPage({
   });
   const project = projectQ.data;
   const [duration, setDuration] = useState(30);
+  const [loopXfadeS, setLoopXfadeS] = useState(2.5);
 
   useEffect(() => {
     if (project?.final.duration_min) setDuration(project.final.duration_min);
   }, [project?.final.duration_min]);
+
+  // Inherit the preference set on the clip step. Local override stays in
+  // `loopXfadeS`; on render, server persists it back to project.clip if changed.
+  useEffect(() => {
+    if (project?.clip.loop_xfade_s) setLoopXfadeS(project.clip.loop_xfade_s);
+  }, [project?.clip.loop_xfade_s]);
 
   const isRendering =
     project?.current_job?.stage === "render" && !project.current_job.error;
 
   const variantName = useMemo(() => `${slug}_${duration}min_${todayStamp()}`, [slug, duration]);
 
+  const chosenClipAttempt = project?.clip.attempts.find(
+    (a) => a.id === project.clip.chosen_attempt_id,
+  );
+  const chosenClipDurationS =
+    (chosenClipAttempt?.config as { duration_s?: number } | undefined)?.duration_s;
+  const xfadeChangedFromSaved =
+    project?.clip.loop_xfade_s !== undefined &&
+    loopXfadeS !== project.clip.loop_xfade_s;
+
   const render = useMutation({
-    mutationFn: () => api.finalRender(slug, duration),
+    mutationFn: () => api.finalRender(slug, duration, loopXfadeS),
     onSuccess: () => {
       toast.success("Render started");
       queryClient.invalidateQueries({ queryKey: ["project", slug] });
@@ -147,7 +166,7 @@ export default function FinalStepPage({
       {/* Render controls */}
       <Card>
         <CardContent className="py-5 space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <div className="space-y-1">
               <Label htmlFor="duration">Final duration (minutes)</Label>
               <Input
@@ -160,7 +179,34 @@ export default function FinalStepPage({
                 className={!durationValid ? "border-red-500" : ""}
               />
               <p className="text-xs text-muted-foreground">
-                1–600 minutes. Render is ffmpeg only — no API cost.
+                1–600 min. ffmpeg only — no API cost.
+              </p>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="loop-xfade">Loop crossfade</Label>
+              <select
+                id="loop-xfade"
+                value={loopXfadeS}
+                onChange={(e) => setLoopXfadeS(Number(e.target.value))}
+                disabled={isRendering}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 disabled:opacity-50"
+              >
+                {XFADE_OPTIONS.map((v) => {
+                  const tooLong =
+                    chosenClipDurationS !== undefined && v * 2 >= chosenClipDurationS;
+                  return (
+                    <option key={v} value={v} disabled={tooLong}>
+                      {v.toFixed(1)}s
+                      {v === 2.5 ? " (default)" : ""}
+                      {tooLong ? " — too long for clip" : ""}
+                    </option>
+                  );
+                })}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                {xfadeChangedFromSaved
+                  ? `Overrides clip-step preference (${project.clip.loop_xfade_s.toFixed(1)}s)`
+                  : "Inherited from clip step"}
               </p>
             </div>
             <div className="space-y-1">
@@ -201,6 +247,7 @@ export default function FinalStepPage({
             <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
               <span className="font-mono">
                 {latestRender.variant_name} · {latestRender.duration_min}min · {(latestRender.bytes / 1024 / 1024).toFixed(0)} MB
+                {latestRender.loop_xfade_s !== null && ` · ${latestRender.loop_xfade_s.toFixed(1)}s xfade`}
               </span>
               <a
                 href={projectFileUrl(slug, latestRender.filename)}
@@ -228,6 +275,7 @@ export default function FinalStepPage({
                   <CardContent className="p-3 flex items-center justify-between gap-3 text-xs">
                     <div className="font-mono">
                       {r.variant_name} · {r.duration_min}min · {(r.bytes / 1024 / 1024).toFixed(0)} MB
+                      {r.loop_xfade_s !== null && ` · ${r.loop_xfade_s.toFixed(1)}s xfade`}
                     </div>
                     <a
                       href={projectFileUrl(slug, r.filename)}

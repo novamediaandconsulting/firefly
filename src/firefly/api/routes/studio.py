@@ -630,17 +630,23 @@ def final_update(slug: str, req: FinalUpdateRequest) -> StudioProject:
 
 class FinalRenderRequest(BaseModel):
     duration_min: int
+    # Optional override for the loop-crossfade window. None = use whatever's
+    # currently saved on project.clip.loop_xfade_s.
+    loop_xfade_s: float | None = None
 
 
 @router.post("/{slug}/final/render", status_code=202)
 def final_render(slug: str, req: FinalRenderRequest) -> dict:
     if req.duration_min < 1 or req.duration_min > 600:
         raise HTTPException(400, "duration must be 1-600 minutes")
+    if req.loop_xfade_s is not None and (req.loop_xfade_s < 0.5 or req.loop_xfade_s > 10.0):
+        raise HTTPException(400, "loop_xfade_s must be between 0.5 and 10.0 seconds")
     store = load_studio(slug)
+    xfade_suffix = f" @ {req.loop_xfade_s:.1f}s xfade" if req.loop_xfade_s is not None else ""
     job = start_job(
         _legacy_proxy(store), stage="render",
-        message=f"rendering {req.duration_min}-minute final",
-        fn=lambda: studio_jobs.render_final(slug, req.duration_min),
+        message=f"rendering {req.duration_min}-minute final{xfade_suffix}",
+        fn=lambda: studio_jobs.render_final(slug, req.duration_min, req.loop_xfade_s),
     )
     return {"status": "started", "job": job.model_dump(mode="json")}
 

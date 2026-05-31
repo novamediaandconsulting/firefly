@@ -108,6 +108,9 @@ class FinalRender(BaseModel):
     filename: str          # relative to project root, e.g. "final_video_xyz.mp4"
     bytes: int = 0
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    # The loop-crossfade window actually used for this render. None on renders
+    # made before the field was introduced — those used the legacy 1.0s default.
+    loop_xfade_s: float | None = None
 
 
 class FinalStep(BaseModel):

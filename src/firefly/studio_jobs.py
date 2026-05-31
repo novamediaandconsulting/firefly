@@ -563,8 +563,16 @@ def render_clip_loop_preview(slug: str, xfade_s: float, n_loops: int = 3) -> Pat
     return out_path
 
 
-def render_final(slug: str, duration_min: int) -> FinalRender:
+def render_final(
+    slug: str,
+    duration_min: int,
+    loop_xfade_s: float | None = None,
+) -> FinalRender:
     """Render the final video using chosen attempts + locked mix.
+
+    `loop_xfade_s`, if given, overrides project.clip.loop_xfade_s for THIS render
+    and is also persisted back to project state — the final step is treated as
+    "modify the preference and render". Pass None to use the existing preference.
 
     Builds:
     - A loopable video from the chosen clip (single-clip session for now).
@@ -583,6 +591,13 @@ def render_final(slug: str, duration_min: int) -> FinalRender:
     if not clip_path.exists():
         raise RuntimeError(f"chosen clip not found at {clip_path}")
 
+    # Resolve the actual xfade to use; persist override if provided.
+    xfade_for_render = (
+        loop_xfade_s if loop_xfade_s is not None else project.clip.loop_xfade_s
+    )
+    if loop_xfade_s is not None and loop_xfade_s != project.clip.loop_xfade_s:
+        project.clip.loop_xfade_s = loop_xfade_s
+
     target_s = duration_min * 60
     intermediate_dir = store.root / "intermediate"
     intermediate_dir.mkdir(exist_ok=True)
@@ -595,7 +610,7 @@ def render_final(slug: str, duration_min: int) -> FinalRender:
         resolution=project.image.resolution,
         fps=30, xfade_s=1.0,
     )
-    ff.make_loopable(session_path, loopable_path, xfade_s=project.clip.loop_xfade_s)
+    ff.make_loopable(session_path, loopable_path, xfade_s=xfade_for_render)
 
     # 2. Build video track at full duration.
     video_track = intermediate_dir / "studio_video_track.mp4"
@@ -637,6 +652,7 @@ def render_final(slug: str, duration_min: int) -> FinalRender:
         filename=str(final_file.relative_to(store.root)),
         bytes=bytes_,
         created_at=datetime.utcnow(),
+        loop_xfade_s=xfade_for_render,
     )
     project.final.renders.append(render)
     project.final.chosen_render_id = render_id

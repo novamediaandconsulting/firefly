@@ -216,10 +216,13 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ duration_min: durationMin }),
     }),
-  finalRender: (slug: string, durationMin: number) =>
+  finalRender: (slug: string, durationMin: number, loopXfadeS?: number) =>
     request<JobStartedResponse>(`/api/projects/${slug}/final/render`, {
       method: "POST",
-      body: JSON.stringify({ duration_min: durationMin }),
+      body: JSON.stringify({
+        duration_min: durationMin,
+        loop_xfade_s: loopXfadeS ?? null,
+      }),
     }),
   finalComplete: (slug: string) =>
     request<StudioProject>(`/api/projects/${slug}/final/complete`, { method: "POST" }),

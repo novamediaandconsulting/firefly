@@ -78,6 +78,7 @@ export interface FinalRender {
   filename: string;
   bytes: number;
   created_at: string;
+  loop_xfade_s: number | null;
 }
 
 export interface FinalStep {
