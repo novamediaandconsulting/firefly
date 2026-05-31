@@ -506,6 +506,63 @@ def render_mix_preview(slug: str, duration_s: int) -> Attempt:
     return attempt
 
 
+def render_clip_loop_preview(slug: str, xfade_s: float, n_loops: int = 3) -> Path:
+    """Render a short preview that shows what the chosen clip looks like when looped.
+
+    Renders make_loopable(chosen_clip, xfade_s) and then concatenates N copies
+    so the user can see at least 2 loop boundaries back-to-back. Also persists
+    `xfade_s` to project.clip.loop_xfade_s as a side effect — the preview is
+    explicitly the value that final render will use.
+
+    Output: projects/<slug>/clip_loop_preview.mp4 (overwritten each call).
+    """
+    store = StudioStore(slug)
+    project = store.load()
+
+    if not project.clip.chosen_attempt_id:
+        raise RuntimeError("select a clip attempt first")
+    clip_attempt = next(
+        (a for a in project.clip.attempts if a.id == project.clip.chosen_attempt_id), None
+    )
+    if clip_attempt is None:
+        raise RuntimeError("chosen_attempt_id points at a missing attempt")
+    clip_path = store.root / clip_attempt.filename
+    if not clip_path.exists():
+        raise RuntimeError(f"chosen clip not found at {clip_path}")
+
+    intermediate_dir = store.root / "intermediate"
+    intermediate_dir.mkdir(exist_ok=True)
+    session_path = intermediate_dir / "loop_preview_session.mp4"
+    loopable_path = intermediate_dir / "loop_preview_loopable.mp4"
+    out_path = store.root / "clip_loop_preview.mp4"
+
+    # Normalize the chosen clip at the project's resolution, then make it loopable.
+    ff.build_session(
+        [clip_path], session_path,
+        resolution=project.image.resolution,
+        fps=30, xfade_s=1.0,
+    )
+    ff.make_loopable(session_path, loopable_path, xfade_s=xfade_s)
+
+    # Concat N copies via ffmpeg concat demuxer — repeats the loopable file
+    # without re-encoding so the boundary is bit-exact identical to what the
+    # final render produces.
+    concat_list = intermediate_dir / "loop_preview_concat.txt"
+    concat_list.write_text("".join(f"file '{loopable_path.name}'\n" for _ in range(n_loops)))
+    ff.run([
+        "ffmpeg", "-y", "-nostats", "-loglevel", "warning",
+        "-f", "concat", "-safe", "0",
+        "-i", str(concat_list),
+        "-c", "copy",
+        str(out_path),
+    ])
+
+    # Persist the chosen xfade so render_final uses the value the user just previewed.
+    project.clip.loop_xfade_s = xfade_s
+    store.save(project)
+    return out_path
+
+
 def render_final(slug: str, duration_min: int) -> FinalRender:
     """Render the final video using chosen attempts + locked mix.
 
@@ -538,7 +595,7 @@ def render_final(slug: str, duration_min: int) -> FinalRender:
         resolution=project.image.resolution,
         fps=30, xfade_s=1.0,
     )
-    ff.make_loopable(session_path, loopable_path, xfade_s=1.0)
+    ff.make_loopable(session_path, loopable_path, xfade_s=project.clip.loop_xfade_s)
 
     # 2. Build video track at full duration.
     video_track = intermediate_dir / "studio_video_track.mp4"
@@ -724,6 +781,7 @@ __all__ = [
     "generate_sfx",
     "generate_music",
     "render_mix_preview",
+    "render_clip_loop_preview",
     "render_final",
     "select_image",
     "select_clip",

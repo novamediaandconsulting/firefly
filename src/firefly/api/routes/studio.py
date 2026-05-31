@@ -330,6 +330,62 @@ def clip_unconfirm(slug: str) -> StudioProject:
     return project
 
 
+class ClipLoopPreviewRequest(BaseModel):
+    xfade_s: float = 2.5
+    n_loops: int = 3
+
+
+@router.post("/{slug}/clip/loop-preview", status_code=202)
+def clip_loop_preview(slug: str, req: ClipLoopPreviewRequest) -> dict:
+    """Render a quick preview of how the chosen clip will look when looped at
+    a given xfade window. The preview shows N back-to-back loops so the user
+    can see the boundary 2+ times. Persists req.xfade_s to project.clip.
+    """
+    if req.xfade_s < 0.5 or req.xfade_s > 10.0:
+        raise HTTPException(400, "xfade_s must be between 0.5 and 10.0 seconds")
+    if req.n_loops < 2 or req.n_loops > 6:
+        raise HTTPException(400, "n_loops must be between 2 and 6")
+    store, project = load_studio_project(slug)
+    if not project.clip.chosen_attempt_id:
+        raise HTTPException(400, "select a clip attempt first")
+    chosen = next(
+        (a for a in project.clip.attempts if a.id == project.clip.chosen_attempt_id), None
+    )
+    if chosen is None:
+        raise HTTPException(400, "chosen clip attempt not found")
+    if chosen.config.get("duration_s", 0) and chosen.config["duration_s"] <= req.xfade_s * 2:
+        raise HTTPException(
+            400,
+            f"xfade {req.xfade_s}s is too long for a {chosen.config['duration_s']}s clip "
+            f"(xfade must be < clip_duration / 2)",
+        )
+    job = start_job(
+        _legacy_proxy(store), stage="clip",
+        message=f"rendering loop preview @ {req.xfade_s}s xfade",
+        fn=lambda: studio_jobs.render_clip_loop_preview(slug, req.xfade_s, req.n_loops),
+    )
+    return {"status": "started", "job": job.model_dump(mode="json")}
+
+
+class ClipConfigRequest(BaseModel):
+    loop_xfade_s: float
+
+
+@router.put("/{slug}/clip/config", response_model=StudioProject)
+def clip_update_config(slug: str, req: ClipConfigRequest) -> StudioProject:
+    """Patch the clip-step config (currently just loop_xfade_s).
+
+    The loop preview also persists this value as a side effect, but this
+    endpoint lets the UI persist the chosen value without re-rendering.
+    """
+    if req.loop_xfade_s < 0.5 or req.loop_xfade_s > 10.0:
+        raise HTTPException(400, "loop_xfade_s must be between 0.5 and 10.0 seconds")
+    store, project = load_studio_project(slug)
+    project.clip.loop_xfade_s = req.loop_xfade_s
+    store.save(project)
+    return project
+
+
 # =============================================================================
 # SFX step
 # =============================================================================

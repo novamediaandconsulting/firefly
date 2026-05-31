@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, projectFileUrl } from "@/lib/api";
@@ -18,6 +18,9 @@ function estimateSeconds(durationS: number): [number, number] {
   const upper = base * 1.5;
   return durationS > 15 ? [Math.round(base * 1.6), Math.round(upper * 1.6)] : [Math.round(base), Math.round(upper)];
 }
+
+// 1.0s → 10.0s in 0.5s steps (19 options)
+const XFADE_OPTIONS = Array.from({ length: 19 }, (_, i) => 1.0 + i * 0.5);
 
 export default function ClipStepPage({
   params,
@@ -40,6 +43,8 @@ export default function ClipStepPage({
   const [motionPrompts, setMotionPrompts] = useState<string[]>([""]);
   const [duration, setDuration] = useState(10);
   const [activeAttemptId, setActiveAttemptId] = useState<string | null>(null);
+  const [xfadeS, setXfadeS] = useState(2.5);
+  const [previewVersion, setPreviewVersion] = useState(0);
 
   // Init from project + auto-pick newest attempt.
   useEffect(() => {
@@ -48,14 +53,27 @@ export default function ClipStepPage({
       setMotionPrompts(project.clip.motion_prompts);
     }
     if (project.clip.duration_s) setDuration(project.clip.duration_s);
+    if (project.clip.loop_xfade_s) setXfadeS(project.clip.loop_xfade_s);
     const latest = project.clip.attempts.at(-1);
     if (latest && latest.id !== activeAttemptId) setActiveAttemptId(latest.id);
     if (project.clip.attempts.length === 0) setActiveAttemptId(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project?.clip.attempts.length, project?.clip.duration_s]);
+  }, [project?.clip.attempts.length, project?.clip.duration_s, project?.clip.loop_xfade_s]);
 
-  const isGenerating =
+  const isClipJob =
     project?.current_job?.stage === "clip" && !project.current_job.error;
+  const jobMsg = project?.current_job?.message ?? "";
+  const isPreviewing = isClipJob && jobMsg.includes("loop preview");
+  const isGenerating = isClipJob && !isPreviewing;
+
+  // Bump preview cache-buster when a preview job finishes (was running, now isn't).
+  const wasPreviewing = useRef(false);
+  useEffect(() => {
+    if (wasPreviewing.current && !isPreviewing) {
+      setPreviewVersion(Date.now());
+    }
+    wasPreviewing.current = isPreviewing;
+  }, [isPreviewing]);
 
   // Image anchor
   const imageAttempt = project?.image.attempts.find(
@@ -73,6 +91,15 @@ export default function ClipStepPage({
       toast.success("Clip generation started");
       queryClient.invalidateQueries({ queryKey: ["project", slug] });
       queryClient.invalidateQueries({ queryKey: ["cost-by-step", slug] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const loopPreview = useMutation({
+    mutationFn: () => api.clipLoopPreview(slug, xfadeS, 3),
+    onSuccess: () => {
+      toast.success(`Rendering loop preview @ ${xfadeS.toFixed(1)}s xfade`);
+      queryClient.invalidateQueries({ queryKey: ["project", slug] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -278,6 +305,85 @@ export default function ClipStepPage({
                   );
                 })()}
               </>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Loop preview — only meaningful once an attempt is selected */}
+      {activeAttempt && (
+        <Card>
+          <CardContent className="py-5 space-y-4">
+            <div className="space-y-1">
+              <Label>Loop crossfade preview</Label>
+              <p className="text-xs text-muted-foreground">
+                The final render loops this clip many times to fill your target
+                duration (e.g. a 10s clip → ~360 loops for a 60-minute video).
+                The crossfade window blends the tail of each loop into its head
+                so the boundary is invisible. Longer xfade = smoother loop but
+                consumes more of the original clip&apos;s motion. Try a few values
+                and preview to compare — the preview is 3 back-to-back loops so
+                you see the boundary twice.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-end gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="xfade-select">Crossfade window</Label>
+                <select
+                  id="xfade-select"
+                  value={xfadeS}
+                  onChange={(e) => setXfadeS(Number(e.target.value))}
+                  disabled={isClipJob}
+                  className="h-10 rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 disabled:opacity-50"
+                >
+                  {XFADE_OPTIONS.map((v) => {
+                    const tooLong =
+                      activeAttempt &&
+                      (activeAttempt.config as { duration_s?: number }).duration_s !== undefined &&
+                      v * 2 >=
+                        ((activeAttempt.config as { duration_s?: number }).duration_s as number);
+                    return (
+                      <option key={v} value={v} disabled={tooLong}>
+                        {v.toFixed(1)}s
+                        {v === 2.5 ? " (default)" : ""}
+                        {tooLong ? " — too long for clip" : ""}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+              <Button
+                size="lg"
+                variant="outline"
+                onClick={() => loopPreview.mutate()}
+                disabled={isClipJob || loopPreview.isPending}
+              >
+                {isPreviewing ? "Rendering preview…" : "Preview loop"}
+              </Button>
+              <div className="text-xs text-muted-foreground self-center">
+                Saved value: {project.clip.loop_xfade_s.toFixed(1)}s
+              </div>
+            </div>
+            {previewVersion > 0 && !isPreviewing && (
+              <div className="space-y-2">
+                <div className="text-xs text-muted-foreground">
+                  Preview (3 back-to-back loops — watch for the boundary):
+                </div>
+                <video
+                  key={previewVersion}
+                  src={`${projectFileUrl(slug, "clip_loop_preview.mp4")}?v=${previewVersion}`}
+                  controls
+                  autoPlay
+                  muted
+                  loop
+                  className="w-full rounded-md bg-black aspect-video"
+                />
+              </div>
+            )}
+            {isPreviewing && (
+              <div className="rounded-md bg-muted/40 py-6 text-center text-sm text-muted-foreground">
+                Rendering loop preview @ {xfadeS.toFixed(1)}s…
+              </div>
             )}
           </CardContent>
         </Card>

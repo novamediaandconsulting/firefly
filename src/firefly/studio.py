@@ -59,6 +59,10 @@ class ImageStep(BaseModel):
 class ClipStep(BaseModel):
     motion_prompts: list[str] = Field(default_factory=list)
     duration_s: int = 10               # 1..30 in the new flow
+    # Loop-crossfade window used by make_loopable during final render. Longer =
+    # softer/smoother loop boundary but more of the original clip's tail content
+    # is consumed by the blend. Hard upper bound: must be < duration_s / 2.
+    loop_xfade_s: float = 2.5
     attempts: list[Attempt] = Field(default_factory=list)
     chosen_attempt_id: str | None = None
     confirmed: bool = False

@@ -33,6 +33,7 @@ export interface ImageStep {
 export interface ClipStep {
   motion_prompts: string[];
   duration_s: number;          // 1..30
+  loop_xfade_s: number;        // 0.5..10.0 — crossfade window at the loop boundary
   attempts: Attempt[];
   chosen_attempt_id: string | null;
   confirmed: boolean;

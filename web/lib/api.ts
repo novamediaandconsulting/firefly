@@ -117,6 +117,16 @@ export const api = {
     request<StudioProject>(`/api/projects/${slug}/clip/confirm`, { method: "POST" }),
   clipUnconfirm: (slug: string) =>
     request<StudioProject>(`/api/projects/${slug}/clip/unconfirm`, { method: "POST" }),
+  clipSetLoopXfade: (slug: string, loopXfadeS: number) =>
+    request<StudioProject>(`/api/projects/${slug}/clip/config`, {
+      method: "PUT",
+      body: JSON.stringify({ loop_xfade_s: loopXfadeS }),
+    }),
+  clipLoopPreview: (slug: string, xfadeS: number, nLoops = 3) =>
+    request<JobStartedResponse>(`/api/projects/${slug}/clip/loop-preview`, {
+      method: "POST",
+      body: JSON.stringify({ xfade_s: xfadeS, n_loops: nLoops }),
+    }),
 
   // ---- sfx step ----
   sfxAddLayer: (slug: string, title: string, prompt = "", gainDb = -12) =>

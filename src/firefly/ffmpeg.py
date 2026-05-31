@@ -58,28 +58,42 @@ def probe_duration(path: Path) -> float:
     return float(json.loads(proc.stdout)["format"]["duration"])
 
 
-def make_loopable(src: Path, dst: Path, *, xfade_s: float = 1.0) -> None:
-    """Crossfade the tail of `src` over its head, producing a seamlessly-loopable clip.
+def make_loopable(src: Path, dst: Path, *, xfade_s: float = 2.5) -> None:
+    """Produce a seamlessly-loopable clip from `src`.
 
-    Result has the same duration as `src`. When repeated, the boundary is hidden by
-    the crossfade.
+    Algorithm: take the last X seconds of the original clip (`tail`), crossfade it
+    INTO the rest of the clip (`head` = clip[0..D-X]) at the start of the output.
+    When the resulting (D-X)-second file loops, the boundary is invisible because:
+
+      • output[0] ≈ tail[0] = clip[D-X]
+      • output[D-X] ≈ head[D-X] = clip[D-X]
+      • So the loop-point frame matches the last visible frame.
+
+    The visible content during the xfade is the natural blend of "what was just
+    happening" (tail) into "what's about to happen" (head), played once at the
+    start of each loop cycle and reading as the same continuous motion.
+
+    Result duration: D - X seconds (the original tail is consumed by the xfade,
+    not appended). Default xfade is 2.5s — long enough for slow ambient motion
+    to morph without the eye catching a transition.
     """
     dst.parent.mkdir(parents=True, exist_ok=True)
     duration = probe_duration(src)
     if duration <= xfade_s * 2:
         raise FfmpegError(
-            f"Clip too short ({duration:.2f}s) for {xfade_s}s xfade loop"
+            f"Clip too short ({duration:.2f}s) for {xfade_s}s xfade loop "
+            f"(need clip duration > 2× xfade)"
         )
-    body = duration - xfade_s
-    # body = the first (D - X) seconds; tail = the last X seconds; head = the first X seconds.
-    # xfade(tail -> head) produces an X-second segment that morphs end into start.
-    # concat(body, crossfade) keeps total duration = D.
+    head_end = duration - xfade_s   # head = clip[0..D-X], duration D-X
+    tail_start = duration - xfade_s # tail = clip[D-X..D], duration X
+    # xfade(tail → head): output starts with X-second blend (tail fading into head),
+    # then continues with head from its t=X onwards.
+    # Output duration = D - X.
     filter_complex = (
-        f"[0:v]trim=0:{body:.6f},setpts=PTS-STARTPTS[body];"
-        f"[0:v]trim={body:.6f}:{duration:.6f},setpts=PTS-STARTPTS[tail];"
-        f"[0:v]trim=0:{xfade_s:.6f},setpts=PTS-STARTPTS[head];"
-        f"[tail][head]xfade=transition=fade:duration={xfade_s:.6f}:offset=0[seam];"
-        f"[body][seam]concat=n=2:v=1:a=0[out]"
+        f"[0:v]split[v1][v2];"
+        f"[v1]trim=0:{head_end:.6f},setpts=PTS-STARTPTS[head];"
+        f"[v2]trim={tail_start:.6f}:{duration:.6f},setpts=PTS-STARTPTS[tail];"
+        f"[tail][head]xfade=transition=fade:duration={xfade_s:.6f}:offset=0[out]"
     )
     run([
         "ffmpeg", "-y", "-nostats", "-loglevel", "warning",
