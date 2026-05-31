@@ -45,6 +45,13 @@ export default function ClipStepPage({
   const [activeAttemptId, setActiveAttemptId] = useState<string | null>(null);
   const [xfadeS, setXfadeS] = useState(2.5);
   const [previewVersion, setPreviewVersion] = useState(0);
+  // Captures the xfade value that was actually rendered into the current
+  // clip_loop_preview.mp4. Used by the overlay to compute loop boundaries
+  // correctly even if the user has since changed the dropdown without
+  // re-rendering.
+  const [lastPreviewedXfadeS, setLastPreviewedXfadeS] = useState(2.5);
+  const [timeInIter, setTimeInIter] = useState<number | null>(null);
+  const previewVideoRef = useRef<HTMLVideoElement>(null);
 
   // Init from project + auto-pick newest attempt.
   useEffect(() => {
@@ -98,6 +105,7 @@ export default function ClipStepPage({
   const loopPreview = useMutation({
     mutationFn: () => api.clipLoopPreview(slug, xfadeS, 3),
     onSuccess: () => {
+      setLastPreviewedXfadeS(xfadeS);
       toast.success(`Rendering loop preview @ ${xfadeS.toFixed(1)}s xfade`);
       queryClient.invalidateQueries({ queryKey: ["project", slug] });
     },
@@ -125,6 +133,26 @@ export default function ClipStepPage({
   const canGenerate = durationValid && !isGenerating && !generate.isPending;
   const [estLow, estHigh] = estimateSeconds(duration);
   const activeAttempt = project?.clip.attempts.find((a) => a.id === activeAttemptId);
+
+  // Drive the loop-boundary overlay off the video element's currentTime.
+  // Each baked-in loop iteration lasts (clip_duration - xfade) seconds, and
+  // the first `xfade` seconds of every iteration is the visible blend region.
+  const previewClipDurationS =
+    (activeAttempt?.config as { duration_s?: number } | undefined)?.duration_s ?? 0;
+  const loopPeriodS = Math.max(0, previewClipDurationS - lastPreviewedXfadeS);
+  useEffect(() => {
+    if (previewVersion === 0 || loopPeriodS <= 0) return;
+    let raf = 0;
+    const tick = () => {
+      const v = previewVideoRef.current;
+      if (v && !Number.isNaN(v.currentTime)) {
+        setTimeInIter(v.currentTime % loopPeriodS);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [previewVersion, loopPeriodS]);
 
   if (!project) {
     return <StudioShell slug={slug} step="clip" title="Clip" hideFooter>Loading…</StudioShell>;
@@ -366,18 +394,47 @@ export default function ClipStepPage({
             </div>
             {previewVersion > 0 && !isPreviewing && (
               <div className="space-y-2">
-                <div className="text-xs text-muted-foreground">
-                  Preview (3 back-to-back loops — watch for the boundary):
+                <div className="text-xs text-muted-foreground flex items-center justify-between">
+                  <span>Preview (3 back-to-back loops):</span>
+                  <span className="font-mono">
+                    iteration {loopPeriodS.toFixed(1)}s · xfade {lastPreviewedXfadeS.toFixed(1)}s
+                  </span>
                 </div>
-                <video
-                  key={previewVersion}
-                  src={`${projectFileUrl(slug, "clip_loop_preview.mp4")}?v=${previewVersion}`}
-                  controls
-                  autoPlay
-                  muted
-                  loop
-                  className="w-full rounded-md bg-black aspect-video"
-                />
+                <div className="relative">
+                  <video
+                    key={previewVersion}
+                    ref={previewVideoRef}
+                    src={`${projectFileUrl(slug, "clip_loop_preview.mp4")}?v=${previewVersion}`}
+                    controls
+                    autoPlay
+                    muted
+                    loop
+                    className="w-full rounded-md bg-black aspect-video"
+                  />
+                  {timeInIter !== null && loopPeriodS > 0 && (() => {
+                    const inBlend = timeInIter < lastPreviewedXfadeS;
+                    const blendLeft = lastPreviewedXfadeS - timeInIter;
+                    const secondsToLoop = loopPeriodS - timeInIter;
+                    return (
+                      <div
+                        className={`pointer-events-none absolute top-3 right-3 px-3 py-1.5 rounded-md font-mono text-xs font-semibold shadow-lg transition-colors ${
+                          inBlend
+                            ? "bg-amber-500/95 text-black"
+                            : "bg-black/70 text-white backdrop-blur-sm"
+                        }`}
+                      >
+                        {inBlend
+                          ? `← BLEND · ${blendLeft.toFixed(1)}s left`
+                          : `loop in ${secondsToLoop.toFixed(1)}s`}
+                      </div>
+                    );
+                  })()}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  White badge = steady playback (countdown to the next loop boundary).
+                  Amber badge = inside the crossfade — this is where jankiness would
+                  show. Look for ghosting, double-images, or sudden motion shifts.
+                </p>
               </div>
             )}
             {isPreviewing && (
