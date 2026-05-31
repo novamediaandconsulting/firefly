@@ -247,7 +247,7 @@ export default function FinalStepPage({
             <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
               <span className="font-mono">
                 {latestRender.variant_name} · {latestRender.duration_min}min · {(latestRender.bytes / 1024 / 1024).toFixed(0)} MB
-                {latestRender.loop_xfade_s !== null && ` · ${latestRender.loop_xfade_s.toFixed(1)}s xfade`}
+                {latestRender.loop_xfade_s != null && ` · ${latestRender.loop_xfade_s.toFixed(1)}s xfade`}
               </span>
               <a
                 href={projectFileUrl(slug, latestRender.filename)}
@@ -275,7 +275,7 @@ export default function FinalStepPage({
                   <CardContent className="p-3 flex items-center justify-between gap-3 text-xs">
                     <div className="font-mono">
                       {r.variant_name} · {r.duration_min}min · {(r.bytes / 1024 / 1024).toFixed(0)} MB
-                      {r.loop_xfade_s !== null && ` · ${r.loop_xfade_s.toFixed(1)}s xfade`}
+                      {r.loop_xfade_s != null && ` · ${r.loop_xfade_s.toFixed(1)}s xfade`}
                     </div>
                     <a
                       href={projectFileUrl(slug, r.filename)}
