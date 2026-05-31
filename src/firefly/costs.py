@@ -30,8 +30,13 @@ class Price:
 PRICING: dict[tuple[str, str], Price] = {
     # fal — image
     ("fal", "fal-ai/flux-pro/v1.1"): Price("image", 0.05),
+    ("fal", "fal-ai/flux-pro/v1.1-ultra"): Price("image", 0.06),
+    ("fal", "fal-ai/flux-pro/kontext"): Price("image", 0.04),
+    ("fal", "fal-ai/bytedance/seedream/v4/edit"): Price("image", 0.03),
     # fal — image-to-video (Kling v3 pro, audio off)
     ("fal", "fal-ai/kling-video/v3/pro/image-to-video"): Price("sec_video", 0.112),
+    # fal — image-to-video (Kling v3 4K native; flat rate regardless of audio)
+    ("fal", "fal-ai/kling-video/v3/4k/image-to-video"): Price("sec_video", 0.42),
     # fal — music (per minute of output)
     ("fal", "cassetteai/music-generator"): Price("min_audio", 0.02),
     ("fal", "beatoven/music-generation"): Price("min_audio", 0.02),

@@ -55,18 +55,33 @@ def generate_image_remix(
     prompt: str,
     *,
     model: str = "fal-ai/flux-pro/kontext",
+    image_size: str | None = None,
 ) -> tuple[bytes, dict]:
     """Image-to-image with text guidance — 'here's a picture, change it like so'.
 
+    Dispatches by model family:
+      - Flux Kontext (default): 1MP output, no resolution control.
+      - Bytedance Seedream v4 Edit: supports native 4K via `image_size="auto_4K"`.
     Returns (png_bytes, metadata). Caller is responsible for resizing.
     """
     _ensure_key()
-    args = {
-        "prompt": prompt,
-        "image_url": image_url,
-        "output_format": "png",
-        "safety_tolerance": "2",
-    }
+    if "seedream" in model:
+        args: dict = {
+            "prompt": prompt,
+            "image_urls": [image_url],
+            "image_size": image_size or "auto_4K",
+            "num_images": 1,
+            "enable_safety_checker": True,
+            "enhance_prompt_mode": "standard",
+        }
+    else:
+        # Flux Kontext family — single image_url, no resolution control.
+        args = {
+            "prompt": prompt,
+            "image_url": image_url,
+            "output_format": "png",
+            "safety_tolerance": "2",
+        }
     result = fal_client.subscribe(model, arguments=args, with_logs=False, client_timeout=240.0)
     images = result.get("images") or []
     if not images:

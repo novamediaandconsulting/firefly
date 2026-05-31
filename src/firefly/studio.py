@@ -46,6 +46,9 @@ class Attempt(BaseModel):
 
 
 class ImageStep(BaseModel):
+    # Resolution dispatches the image, edit, and clip models:
+    #   720p / 1080p — Flux Pro v1.1 (1MP) + Kontext + Kling v3 pro (1080p native)
+    #   4k           — Flux Pro Ultra (4MP) + Seedream v4 Edit (4K) + Kling v3 4K (3840×2160 native)
     prompt: str = ""
     resolution: str = "1080p"          # "720p" | "1080p" | "4k"
     attempts: list[Attempt] = Field(default_factory=list)
@@ -111,9 +114,17 @@ class FinalStep(BaseModel):
 
 
 class StudioConfig(BaseModel):
+    # 1-MP Flux for 720p/1080p prototyping (cheap, fast)
     image_model: str = "fal-ai/flux-pro/v1.1"
-    image_edit_model: str = "fal-ai/flux-pro/kontext"  # img-to-img with text guidance (Remix tab)
+    # 4-MP Flux Ultra for true-4K image gen (~same price, 4x the detail)
+    image_model_4k: str = "fal-ai/flux-pro/v1.1-ultra"
+    image_edit_model: str = "fal-ai/flux-pro/kontext"  # 1MP img-to-img for 720p/1080p Remix
+    # Seedream v4 Edit does native 4K img-to-img — used when Remix is run on a 4K project.
+    image_edit_model_4k: str = "fal-ai/bytedance/seedream/v4/edit"
+    # 1080p-native Kling for 720p/1080p
     video_model: str = "fal-ai/kling-video/v3/pro/image-to-video"
+    # 4K-native Kling for true 4K (≈3.75x cost: $0.42/sec vs $0.112/sec)
+    video_model_4k: str = "fal-ai/kling-video/v3/4k/image-to-video"
     music_model: str = "cassetteai/music-generator"
     music_duration_s: int = 180
     plan_model: str = "claude-sonnet-4-6"   # kept for compatibility / future use

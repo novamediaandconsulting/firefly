@@ -14,13 +14,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { StudioProject } from "@/lib/types";
 
 const RESOLUTIONS = [
-  { id: "720p",  label: "720p",  hint: "fast" },
+  { id: "720p",  label: "720p",  hint: "fast prototyping" },
   { id: "1080p", label: "1080p", hint: "default" },
-  { id: "4k",    label: "4K",    hint: "upscaled" },
+  { id: "4k",    label: "4K",    hint: "native, ~3–4× cost" },
 ];
 
 function estimateSeconds(resolution: string): [number, number] {
-  return resolution === "4k" ? [15, 30] : [8, 20];
+  return resolution === "4k" ? [20, 40] : [8, 20];
 }
 
 export default function ImageStepPage({

@@ -59,25 +59,48 @@ def _resize_image(src: Path, dst: Path, target: str) -> None:
     ])
 
 
-def _kling_input_image(src: Path, tmp_dir: Path) -> Path:
-    """Produce a Kling-safe input image (~1080p JPEG, well under 10 MiB).
+def _kling_input_image(src: Path, tmp_dir: Path, *, native_4k: bool = False) -> Path:
+    """Produce a Kling-safe input image (high-quality JPEG, well under 10 MiB).
 
     Kling's image-to-video endpoint rejects images larger than 10 MiB; a 4K
-    PNG comfortably exceeds that. Downscaling to 1920×1080 and re-encoding as
-    high-quality JPEG keeps the input safe without affecting Kling's output
-    quality (Kling renders at its own resolution anyway).
+    PNG comfortably exceeds that. Re-encoding as high-quality JPEG keeps the
+    input safe.
+
+    `native_4k=True` keeps the input at up to ~2K (2560×1440) so Kling's 4K
+    endpoint has more source detail to work from. The 1080p endpoint can't
+    use anything past 1080p anyway, so we cap at 1920×1080 for the rest.
     """
     tmp_dir.mkdir(parents=True, exist_ok=True)
     out = tmp_dir / f"kling_input_{int(datetime.utcnow().timestamp())}.jpg"
+    cap = "2560:1440" if native_4k else "1920:1080"
+    w_cap, h_cap = cap.split(":")
     ff.run([
         "ffmpeg", "-y", "-nostats", "-loglevel", "warning",
         "-i", str(src),
-        "-vf", "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease",
+        "-vf", f"scale='min({w_cap},iw)':'min({h_cap},ih)':force_original_aspect_ratio=decrease",
         "-q:v", "3",   # ffmpeg JPEG quality scale (2-5 ≈ 90-95%); 3 is ~92%
         "-frames:v", "1",
         str(out),
     ])
     return out
+
+
+def _image_model_for(project: StudioProject, resolution: str) -> str:
+    """Pick Flux v1.1 vs Flux Ultra based on the resolution the user requested."""
+    return project.config.image_model_4k if resolution.lower() == "4k" else project.config.image_model
+
+
+def _video_model_for(project: StudioProject) -> tuple[str, bool]:
+    """Pick Kling v3 pro vs Kling v3 4K based on the chosen image's resolution.
+
+    Returns (model_path, is_native_4k). The is_native_4k flag tells the caller
+    to keep the Kling input image at higher resolution (~2K) instead of
+    capping at 1080p.
+    """
+    res = (project.image.resolution or "1080p").lower()
+    if res == "4k":
+        return project.config.video_model_4k, True
+    return project.config.video_model, False
 
 
 def _write_meta(attempt_file: Path, attempt: Attempt) -> None:
@@ -104,8 +127,9 @@ def generate_image(slug: str, prompt: str, resolution: str) -> Attempt:
     target_dir.mkdir(parents=True, exist_ok=True)
     target_file = target_dir / f"{attempt_id}.png"
 
-    # Generate at native resolution (Flux Pro v1.1 ~1MP).
-    png, meta = fal.generate_image(prompt, model=project.config.image_model)
+    # Pick Flux v1.1 (1MP) or Flux Ultra (4MP) based on resolution.
+    image_model = _image_model_for(project, resolution)
+    png, meta = fal.generate_image(prompt, model=image_model)
     # Write native PNG to a temp path, then resize.
     raw_path = target_dir / f"{attempt_id}.raw.png"
     raw_path.write_bytes(png)
@@ -117,7 +141,7 @@ def generate_image(slug: str, prompt: str, resolution: str) -> Attempt:
         # Use the legacy Project class only for the costs_path helper — record
         # writes to projects/<slug>/costs.jsonl which is the same path.
         _legacy_proxy(store),
-        provider="fal", model=project.config.image_model,
+        provider="fal", model=image_model,
         stage="image", artifact_id=attempt_id, units=1.0,
     )
 
@@ -167,10 +191,16 @@ def generate_image_remix(
     target_dir.mkdir(parents=True, exist_ok=True)
     target_file = target_dir / f"{attempt_id}.png"
 
-    # Upload reference to fal, then call Kontext.
+    # Pick Flux Kontext (1MP) for 720p/1080p or Seedream v4 Edit (native 4K) for 4K.
+    is_4k = resolution.lower() == "4k"
+    edit_model = project.config.image_edit_model_4k if is_4k else project.config.image_edit_model
+
+    # Upload reference to fal, then call the edit model.
     image_url = fal.upload_image(ref_path)
     png, meta = fal.generate_image_remix(
-        image_url, prompt, model=project.config.image_edit_model,
+        image_url, prompt,
+        model=edit_model,
+        image_size="auto_4K" if is_4k else None,
     )
     raw_path = target_dir / f"{attempt_id}.raw.png"
     raw_path.write_bytes(png)
@@ -179,7 +209,7 @@ def generate_image_remix(
 
     entry = costs_mod.record(
         _legacy_proxy(store),
-        provider="fal", model=project.config.image_edit_model,
+        provider="fal", model=edit_model,
         stage="image", artifact_id=attempt_id, units=1.0,
     )
 
@@ -233,20 +263,23 @@ def generate_clip(slug: str, motion_prompts: list[str], duration_s: int) -> Atte
     target_dir.mkdir(parents=True, exist_ok=True)
     target_file = target_dir / f"{attempt_id}.mp4"
 
+    # Pick Kling v3 pro (1080p) or Kling v3 4K based on the chosen image's resolution.
+    video_model, native_4k = _video_model_for(project)
+
     total_cost = 0.0
     if duration_s <= 15:
-        kling_in = _kling_input_image(image_path, target_dir)
+        kling_in = _kling_input_image(image_path, target_dir, native_4k=native_4k)
         image_url = fal.upload_image(kling_in)
         kling_in.unlink(missing_ok=True)
         mp4, _meta = fal.generate_clip(
             image_url, prompt,
-            model=project.config.video_model,
+            model=video_model,
             duration=str(duration_s),
         )
         target_file.write_bytes(mp4)
         entry = costs_mod.record(
             _legacy_proxy(store),
-            provider="fal", model=project.config.video_model,
+            provider="fal", model=video_model,
             stage="clip", artifact_id=attempt_id, units=float(duration_s),
         )
         total_cost = entry.cost_usd
@@ -258,28 +291,31 @@ def generate_clip(slug: str, motion_prompts: list[str], duration_s: int) -> Atte
         seg2 = target_dir / f"{attempt_id}.seg2.mp4"
         last_frame = target_dir / f"{attempt_id}.lastframe.jpg"
 
-        # Segment 1 — from chosen image (downscaled to Kling-safe input)
-        kling_in = _kling_input_image(image_path, target_dir)
+        # Segment 1 — from chosen image (Kling-safe JPEG version)
+        kling_in = _kling_input_image(image_path, target_dir, native_4k=native_4k)
         image_url = fal.upload_image(kling_in)
         kling_in.unlink(missing_ok=True)
         mp4, _ = fal.generate_clip(
             image_url, prompt,
-            model=project.config.video_model,
+            model=video_model,
             duration=str(seg1_dur),
         )
         seg1.write_bytes(mp4)
         e1 = costs_mod.record(
             _legacy_proxy(store),
-            provider="fal", model=project.config.video_model,
+            provider="fal", model=video_model,
             stage="clip", artifact_id=f"{attempt_id}_seg1", units=float(seg1_dur),
         )
         total_cost += e1.cost_usd
 
-        # Extract last frame of seg1 as a Kling-safe JPEG directly.
+        # Extract last frame of seg1 as a Kling-safe JPEG; cap matches the
+        # endpoint (2K for 4K Kling, 1080p otherwise).
+        cap = "2560:1440" if native_4k else "1920:1080"
+        w_cap, h_cap = cap.split(":")
         ff.run([
             "ffmpeg", "-y", "-nostats", "-loglevel", "warning",
             "-sseof", "-0.1", "-i", str(seg1),
-            "-vf", "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease",
+            "-vf", f"scale='min({w_cap},iw)':'min({h_cap},ih)':force_original_aspect_ratio=decrease",
             "-q:v", "3", "-frames:v", "1", str(last_frame),
         ])
 
@@ -287,13 +323,13 @@ def generate_clip(slug: str, motion_prompts: list[str], duration_s: int) -> Atte
         last_url = fal.upload_image(last_frame)
         mp4, _ = fal.generate_clip(
             last_url, prompt,
-            model=project.config.video_model,
+            model=video_model,
             duration=str(seg2_dur),
         )
         seg2.write_bytes(mp4)
         e2 = costs_mod.record(
             _legacy_proxy(store),
-            provider="fal", model=project.config.video_model,
+            provider="fal", model=video_model,
             stage="clip", artifact_id=f"{attempt_id}_seg2", units=float(seg2_dur),
         )
         total_cost += e2.cost_usd
