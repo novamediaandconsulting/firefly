@@ -129,7 +129,7 @@ export default function ClipStepPage({
     }
   }
 
-  const durationValid = duration >= 1 && duration <= 30;
+  const durationValid = duration >= 3 && duration <= 30;
   const canGenerate = durationValid && !isGenerating && !generate.isPending;
   const [estLow, estHigh] = estimateSeconds(duration);
   const activeAttempt = project?.clip.attempts.find((a) => a.id === activeAttemptId);
@@ -243,7 +243,7 @@ export default function ClipStepPage({
           <div className="flex-1 space-y-2">
             <Label htmlFor="duration">Clip duration (seconds)</Label>
             <p className="text-xs text-muted-foreground">
-              1–30s. Above 15s = chained 2-shot (motion stutters slightly at the seam).
+              3–30s. Above 15s = chained 2-shot (motion stutters slightly at the seam).
               ~$1.12 per 10 seconds.
             </p>
           </div>
@@ -251,14 +251,14 @@ export default function ClipStepPage({
             <Input
               id="duration"
               type="number"
-              min={1}
+              min={3}
               max={30}
               value={duration}
               onChange={(e) => setDuration(Number(e.target.value))}
               className={`w-24 text-base ${!durationValid ? "border-red-500" : ""}`}
             />
             {!durationValid && (
-              <p className="text-xs text-red-600">must be 1–30</p>
+              <p className="text-xs text-red-600">must be 3–30</p>
             )}
           </div>
           <Button size="lg" onClick={() => generate.mutate()} disabled={!canGenerate}>
