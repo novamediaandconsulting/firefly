@@ -58,7 +58,7 @@ class ImageStep(BaseModel):
 
 class ClipStep(BaseModel):
     motion_prompts: list[str] = Field(default_factory=list)
-    duration_s: int = 10               # 1..30 in the new flow
+    duration_s: int = 10               # 3..60 (1–4 chained 15s Kling segments)
     # Loop-crossfade window used by make_loopable during final render. Longer =
     # softer/smoother loop boundary but more of the original clip's tail content
     # is consumed by the blend. Hard upper bound: must be < duration_s / 2.

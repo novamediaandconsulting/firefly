@@ -240,10 +240,44 @@ def generate_image_remix(
 # ---- CLIP -------------------------------------------------------------------
 
 
+def _chain_segments(duration_s: int) -> list[int]:
+    """Split a clip duration into Kling-valid segments (each in [3, 15] seconds).
+
+    Strategy: fill segments with 15s greedily; the last segment takes the
+    remainder. If that remainder would be below Kling's 3s floor, borrow seconds
+    from the previous segment so both end up valid. So a 16s clip splits as
+    [13, 3] (not [15, 1]) — keeping segment 1 close to a "full" Kling run.
+
+    Examples:
+      15s  → [15]
+      16s  → [13, 3]
+      20s  → [15, 5]
+      30s  → [15, 15]
+      45s  → [15, 15, 15]
+      46s  → [15, 15, 13, 3]
+      60s  → [15, 15, 15, 15]
+    """
+    if duration_s <= 15:
+        return [duration_s]
+    n = (duration_s + 14) // 15  # ceil(duration / 15)
+    segs = [15] * (n - 1) + [duration_s - 15 * (n - 1)]
+    if segs[-1] < 3:
+        deficit = 3 - segs[-1]
+        segs[-2] -= deficit
+        segs[-1] = 3
+    return segs
+
+
 def generate_clip(slug: str, motion_prompts: list[str], duration_s: int) -> Attempt:
-    """Generate one clip attempt. Chains Kling calls for durations > 15s."""
-    if duration_s < 1 or duration_s > 30:
-        raise RuntimeError("clip duration must be between 1 and 30 seconds")
+    """Generate one clip attempt. Chains Kling calls for durations > 15s.
+
+    Up to 60 seconds via 1–4 sequentially-chained segments. Each segment after
+    the first starts from the last frame of the previous one, so motion at the
+    seams is continuous-ish (but Kling re-establishes motion vectors at each
+    seam, so chained clips have a small visible "settle" at each boundary).
+    """
+    if duration_s < 3 or duration_s > 60:
+        raise RuntimeError("clip duration must be between 3 and 60 seconds")
     store = StudioStore(slug)
     project = store.load()
     if not project.image.chosen_attempt_id:
@@ -266,8 +300,14 @@ def generate_clip(slug: str, motion_prompts: list[str], duration_s: int) -> Atte
     # Pick Kling v3 pro (1080p) or Kling v3 4K based on the chosen image's resolution.
     video_model, native_4k = _video_model_for(project)
 
+    seg_durations = _chain_segments(duration_s)
+    n_segments = len(seg_durations)
+    cap = "2560:1440" if native_4k else "1920:1080"
+    w_cap, h_cap = cap.split(":")
+
     total_cost = 0.0
-    if duration_s <= 15:
+
+    if n_segments == 1:
         kling_in = _kling_input_image(image_path, target_dir, native_4k=native_4k)
         image_url = fal.upload_image(kling_in)
         kling_in.unlink(missing_ok=True)
@@ -284,61 +324,51 @@ def generate_clip(slug: str, motion_prompts: list[str], duration_s: int) -> Atte
         )
         total_cost = entry.cost_usd
     else:
-        # 16-30s: chain two segments. Segment 1 = 15s; segment 2 = remaining.
-        seg1_dur = 15
-        seg2_dur = duration_s - 15
-        seg1 = target_dir / f"{attempt_id}.seg1.mp4"
-        seg2 = target_dir / f"{attempt_id}.seg2.mp4"
-        last_frame = target_dir / f"{attempt_id}.lastframe.jpg"
+        # Chained N-shot. Each segment starts from the previous segment's last
+        # frame (or the original chosen image, for segment 1).
+        seg_files: list[Path] = []
+        anchor_path = image_path
+        intermediates: list[Path] = []
 
-        # Segment 1 — from chosen image (Kling-safe JPEG version)
-        kling_in = _kling_input_image(image_path, target_dir, native_4k=native_4k)
-        image_url = fal.upload_image(kling_in)
-        kling_in.unlink(missing_ok=True)
-        mp4, _ = fal.generate_clip(
-            image_url, prompt,
-            model=video_model,
-            duration=str(seg1_dur),
-        )
-        seg1.write_bytes(mp4)
-        e1 = costs_mod.record(
-            _legacy_proxy(store),
-            provider="fal", model=video_model,
-            stage="clip", artifact_id=f"{attempt_id}_seg1", units=float(seg1_dur),
-        )
-        total_cost += e1.cost_usd
+        for i, seg_dur in enumerate(seg_durations):
+            seg_file = target_dir / f"{attempt_id}.seg{i + 1}.mp4"
+            kling_in = _kling_input_image(anchor_path, target_dir, native_4k=native_4k)
+            try:
+                image_url = fal.upload_image(kling_in)
+            finally:
+                kling_in.unlink(missing_ok=True)
+            mp4, _ = fal.generate_clip(
+                image_url, prompt,
+                model=video_model,
+                duration=str(seg_dur),
+            )
+            seg_file.write_bytes(mp4)
+            seg_files.append(seg_file)
+            entry = costs_mod.record(
+                _legacy_proxy(store),
+                provider="fal", model=video_model,
+                stage="clip",
+                artifact_id=f"{attempt_id}_seg{i + 1}",
+                units=float(seg_dur),
+            )
+            total_cost += entry.cost_usd
 
-        # Extract last frame of seg1 as a Kling-safe JPEG; cap matches the
-        # endpoint (2K for 4K Kling, 1080p otherwise).
-        cap = "2560:1440" if native_4k else "1920:1080"
-        w_cap, h_cap = cap.split(":")
-        ff.run([
-            "ffmpeg", "-y", "-nostats", "-loglevel", "warning",
-            "-sseof", "-0.1", "-i", str(seg1),
-            "-vf", f"scale='min({w_cap},iw)':'min({h_cap},ih)':force_original_aspect_ratio=decrease",
-            "-q:v", "3", "-frames:v", "1", str(last_frame),
-        ])
+            # Extract this segment's last frame as the anchor for the next seg
+            # (skip on the final segment — nothing chains off it).
+            if i < n_segments - 1:
+                last_frame = target_dir / f"{attempt_id}.lastframe{i + 1}.jpg"
+                ff.run([
+                    "ffmpeg", "-y", "-nostats", "-loglevel", "warning",
+                    "-sseof", "-0.1", "-i", str(seg_file),
+                    "-vf", f"scale='min({w_cap},iw)':'min({h_cap},ih)':force_original_aspect_ratio=decrease",
+                    "-q:v", "3", "-frames:v", "1", str(last_frame),
+                ])
+                anchor_path = last_frame
+                intermediates.append(last_frame)
 
-        # Segment 2 — from last frame of seg1
-        last_url = fal.upload_image(last_frame)
-        mp4, _ = fal.generate_clip(
-            last_url, prompt,
-            model=video_model,
-            duration=str(seg2_dur),
-        )
-        seg2.write_bytes(mp4)
-        e2 = costs_mod.record(
-            _legacy_proxy(store),
-            provider="fal", model=video_model,
-            stage="clip", artifact_id=f"{attempt_id}_seg2", units=float(seg2_dur),
-        )
-        total_cost += e2.cost_usd
-
-        # Concatenate seg1 + seg2 → target_file
+        # Concatenate all segments → target_file
         concat_list = target_dir / f"{attempt_id}.concat.txt"
-        concat_list.write_text(
-            f"file '{seg1.name}'\nfile '{seg2.name}'\n"
-        )
+        concat_list.write_text("".join(f"file '{f.name}'\n" for f in seg_files))
         ff.run([
             "ffmpeg", "-y", "-nostats", "-loglevel", "warning",
             "-f", "concat", "-safe", "0",
@@ -346,11 +376,9 @@ def generate_clip(slug: str, motion_prompts: list[str], duration_s: int) -> Atte
             "-c", "copy",
             str(target_file),
         ])
-        # Clean intermediates (keep segs for debug? remove for cleanliness)
-        seg1.unlink(missing_ok=True)
-        seg2.unlink(missing_ok=True)
-        last_frame.unlink(missing_ok=True)
-        concat_list.unlink(missing_ok=True)
+        # Clean intermediates
+        for f in seg_files + intermediates + [concat_list]:
+            f.unlink(missing_ok=True)
 
     attempt = Attempt(
         id=attempt_id,
@@ -359,7 +387,9 @@ def generate_clip(slug: str, motion_prompts: list[str], duration_s: int) -> Atte
         config={
             "duration_s": duration_s,
             "motion_prompts": motion_prompts,
-            "chained": duration_s > 15,
+            "chained": n_segments > 1,
+            "n_segments": n_segments,
+            "segment_durations_s": seg_durations,
         },
         created_at=datetime.utcnow(),
         cost_usd=total_cost,

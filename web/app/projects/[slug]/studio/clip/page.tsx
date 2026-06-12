@@ -13,10 +13,14 @@ import { Textarea } from "@/components/ui/textarea";
 import type { StudioProject } from "@/lib/types";
 
 function estimateSeconds(durationS: number): [number, number] {
-  // Kling v3 pro: ~6× clip duration empirically; chained pair takes ~2x.
-  const base = durationS * 6;
-  const upper = base * 1.5;
-  return durationS > 15 ? [Math.round(base * 1.6), Math.round(upper * 1.6)] : [Math.round(base), Math.round(upper)];
+  // Kling v3 pro: ~6× clip duration empirically. Chained runs sequentially
+  // (each seg needs the previous seg's last frame), so wall time scales with
+  // segment count + a small per-seg overhead for ffmpeg + upload.
+  const nSegs = durationS <= 15 ? 1 : Math.ceil(durationS / 15);
+  const segDur = durationS / nSegs;
+  const perSegSec = segDur * 6 + (nSegs > 1 ? 10 : 0);
+  const base = nSegs * perSegSec;
+  return [Math.round(base), Math.round(base * 1.4)];
 }
 
 // 1.0s → 10.0s in 0.5s steps (19 options)
@@ -129,7 +133,7 @@ export default function ClipStepPage({
     }
   }
 
-  const durationValid = duration >= 3 && duration <= 30;
+  const durationValid = duration >= 3 && duration <= 60;
   const canGenerate = durationValid && !isGenerating && !generate.isPending;
   const [estLow, estHigh] = estimateSeconds(duration);
   const activeAttempt = project?.clip.attempts.find((a) => a.id === activeAttemptId);
@@ -243,8 +247,14 @@ export default function ClipStepPage({
           <div className="flex-1 space-y-2">
             <Label htmlFor="duration">Clip duration (seconds)</Label>
             <p className="text-xs text-muted-foreground">
-              3–30s. Above 15s = chained 2-shot (motion stutters slightly at the seam).
-              ~$1.12 per 10 seconds.
+              3–60s. Kling caps at 15s natively; longer runs chain 2–4 segments
+              (motion settles briefly at each seam). Cost scales linearly:
+              ~$1.12 per 10s at 1080p, ~$4.20 per 10s at 4K.
+              {duration > 15 && (
+                <>
+                  {" "}This clip = {Math.ceil(duration / 15)}-shot chain.
+                </>
+              )}
             </p>
           </div>
           <div className="space-y-1">
@@ -252,13 +262,13 @@ export default function ClipStepPage({
               id="duration"
               type="number"
               min={3}
-              max={30}
+              max={60}
               value={duration}
               onChange={(e) => setDuration(Number(e.target.value))}
               className={`w-24 text-base ${!durationValid ? "border-red-500" : ""}`}
             />
             {!durationValid && (
-              <p className="text-xs text-red-600">must be 3–30</p>
+              <p className="text-xs text-red-600">must be 3–60</p>
             )}
           </div>
           <Button size="lg" onClick={() => generate.mutate()} disabled={!canGenerate}>
@@ -295,7 +305,8 @@ export default function ClipStepPage({
                     <div className="inline-block w-8 h-8 rounded-full bg-amber-500 shadow-[0_0_24px_rgba(245,158,11,0.6)] animate-pulse" />
                     <p className="font-semibold">Generating {duration}s clip…</p>
                     <p className="text-xs text-muted-foreground">
-                      ~{estLow}–{estHigh} seconds {duration > 15 && "(chained 2-shot)"}
+                      ~{estLow}–{estHigh} seconds
+                      {duration > 15 && ` (chained ${Math.ceil(duration / 15)}-shot)`}
                     </p>
                   </div>
                 </div>

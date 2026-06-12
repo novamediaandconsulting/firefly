@@ -295,13 +295,14 @@ class ClipGenerateRequest(BaseModel):
 
 @router.post("/{slug}/clip/generate", status_code=202)
 def clip_generate(slug: str, req: ClipGenerateRequest) -> dict:
-    if req.duration_s < 3 or req.duration_s > 30:
-        raise HTTPException(400, "duration must be between 3 and 30 seconds (Kling minimum is 3s)")
+    if req.duration_s < 3 or req.duration_s > 60:
+        raise HTTPException(400, "duration must be between 3 and 60 seconds (Kling minimum is 3s)")
     store = load_studio(slug)
+    n_segments = 1 if req.duration_s <= 15 else (req.duration_s + 14) // 15
+    chain_note = f" (chained {n_segments}-shot)" if n_segments > 1 else ""
     job = start_job(
         _legacy_proxy(store), stage="clip",
-        message=f"generating {req.duration_s}s clip"
-                + (" (chained 15+15)" if req.duration_s > 15 else ""),
+        message=f"generating {req.duration_s}s clip{chain_note}",
         fn=lambda: studio_jobs.generate_clip(slug, req.motion_prompts, req.duration_s),
     )
     return {"status": "started", "job": job.model_dump(mode="json")}
